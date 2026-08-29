@@ -409,6 +409,8 @@ class Renderer3D {
         projectionMatrix: FloatArray,
         depthMap: com.example.engine.ar.ARDepthMapBuffer? = null,
         depthOcclusionThresholdMeters: Float = 0f,
+        screenUOffset: Float = 0f,
+        screenUScale: Float = 1f,
         wireframe: Boolean = false,
         primaryColor: Color = Color(0xFFE2E8F0),
         hdriPreset: HdriPreset = HdriPreset.STUDIO_PRO,
@@ -442,6 +444,8 @@ class Renderer3D {
         val vClip2 = FloatArray(4)
         val vClip3 = FloatArray(4)
         val vEye1 = FloatArray(4)
+        val vEye2 = FloatArray(4)
+        val vEye3 = FloatArray(4)
 
         val hasDepthBuffer = depthMap != null && depthMap.isValid
 
@@ -453,13 +457,15 @@ class Renderer3D {
             android.opengl.Matrix.multiplyMV(vClip1, 0, mvpMatrix, 0, vIn, 0)
             android.opengl.Matrix.multiplyMV(vEye1, 0, vmMatrix, 0, vIn, 0)
 
-            // 2. Transform vertex 2 to clip space
+            // 2. Transform vertex 2 to clip space & eye space
             vIn[0] = tri.v2.x; vIn[1] = tri.v2.y; vIn[2] = tri.v2.z; vIn[3] = 1.0f
             android.opengl.Matrix.multiplyMV(vClip2, 0, mvpMatrix, 0, vIn, 0)
+            android.opengl.Matrix.multiplyMV(vEye2, 0, vmMatrix, 0, vIn, 0)
 
-            // 3. Transform vertex 3 to clip space
+            // 3. Transform vertex 3 to clip space & eye space
             vIn[0] = tri.v3.x; vIn[1] = tri.v3.y; vIn[2] = tri.v3.z; vIn[3] = 1.0f
             android.opengl.Matrix.multiplyMV(vClip3, 0, mvpMatrix, 0, vIn, 0)
+            android.opengl.Matrix.multiplyMV(vEye3, 0, vmMatrix, 0, vIn, 0)
 
             val w1 = vClip1[3]
             val w2 = vClip2[3]
@@ -493,38 +499,13 @@ class Renderer3D {
                 continue
             }
 
-            // Multi-point fragment depth sampling against ARCore 16-bit physical depth map
-            val u1 = p1x / width
-            val v1 = p1y / height
-            val u2 = p2x / width
-            val v2 = p2y / height
-            val u3 = p3x / width
-            val v3 = p3y / height
-            val uc = (u1 + u2 + u3) * 0.33333334f
-            val vc = (v1 + v2 + v3) * 0.33333334f
+            val eyeDepth1 = -vEye1[2]
+            val eyeDepth2 = -vEye2[2]
+            val eyeDepth3 = -vEye3[2]
+            val avgEyeDepth = (eyeDepth1 + eyeDepth2 + eyeDepth3) * 0.33333334f
 
-            val eyeDepthMeters = -vEye1[2]
-
-            // 1. Fragment-Level Multi-Sample Physical Depth Occlusion
-            if (hasDepthBuffer) {
-                val d1 = depthMap!!.getDepthMetersAt(u1, v1)
-                val d2 = depthMap.getDepthMetersAt(u2, v2)
-                val d3 = depthMap.getDepthMetersAt(u3, v3)
-                val dc = depthMap.getDepthMetersAt(uc, vc)
-
-                val occ1 = d1 < 20.0f && eyeDepthMeters > (d1 + 0.03f)
-                val occ2 = d2 < 20.0f && eyeDepthMeters > (d2 + 0.03f)
-                val occ3 = d3 < 20.0f && eyeDepthMeters > (d3 + 0.03f)
-                val occC = dc < 20.0f && eyeDepthMeters > (dc + 0.03f)
-
-                // If completely occluded by physical environment, discard
-                if (occ1 && occ2 && occ3 && occC) {
-                    continue
-                }
-            }
-
-            // 2. Secondary fallback threshold check if enabled
-            if (depthOcclusionThresholdMeters > 0.1f && eyeDepthMeters > depthOcclusionThresholdMeters) {
+            // Secondary fallback threshold check if enabled
+            if (depthOcclusionThresholdMeters > 0.1f && avgEyeDepth > depthOcclusionThresholdMeters) {
                 continue
             }
 
@@ -562,6 +543,9 @@ class Renderer3D {
                     p1 = Offset(p1x, p1y),
                     p2 = Offset(p2x, p2y),
                     p3 = Offset(p3x, p3y),
+                    z1 = eyeDepth1,
+                    z2 = eyeDepth2,
+                    z3 = eyeDepth3,
                     avgZ = -avgClipZ, // For depth sorting
                     diffuseIrradiance = diffuseIrradiance,
                     specularRadiance = specularRadiance,
@@ -577,55 +561,179 @@ class Renderer3D {
         projectedList.sortWith { a, b -> b.avgZ.compareTo(a.avgZ) }
 
         val strokeStyle = Stroke(width = 1.2f)
+        val spanPath = androidx.compose.ui.graphics.Path()
+
         for (i in 0 until projectedList.size) {
             val tri = projectedList[i]
-            reusablePath.reset()
-            reusablePath.moveTo(tri.p1.x, tri.p1.y)
-            reusablePath.lineTo(tri.p2.x, tri.p2.y)
-            reusablePath.lineTo(tri.p3.x, tri.p3.y)
-            reusablePath.close()
+
+            val c = tri.baseColor
+            val ec = tri.emissiveColor
+            val metallic = tri.metallic
+
+            val linR = srgbToLinear(c.red)
+            val linG = srgbToLinear(c.green)
+            val linB = srgbToLinear(c.blue)
+
+            val dielectricDiffuse = (1.0f - metallic).coerceIn(0.0f, 1.0f)
+            val diffR = linR * tri.diffuseIrradiance.x * dielectricDiffuse
+            val diffG = linG * tri.diffuseIrradiance.y * dielectricDiffuse
+            val diffB = linB * tri.diffuseIrradiance.z * dielectricDiffuse
+
+            val f0R = 0.04f * (1.0f - metallic) + linR * metallic
+            val f0G = 0.04f * (1.0f - metallic) + linG * metallic
+            val f0B = 0.04f * (1.0f - metallic) + linB * metallic
+
+            val specR = tri.specularRadiance.x * f0R
+            val specG = tri.specularRadiance.y * f0G
+            val specB = tri.specularRadiance.z * f0B
+
+            val linEmissiveR = srgbToLinear(ec.red) * ec.alpha
+            val linEmissiveG = srgbToLinear(ec.green) * ec.alpha
+            val linEmissiveB = srgbToLinear(ec.blue) * ec.alpha
+
+            val litR = diffR + specR + linEmissiveR
+            val litG = diffG + specG + linEmissiveG
+            val litB = diffB + specB + linEmissiveB
+
+            val outR = if (engineProfile.useFilmicToneMapping) linearToSrgb(litR) else litR.coerceIn(0f, 1f).pow(1f / 2.2f)
+            val outG = if (engineProfile.useFilmicToneMapping) linearToSrgb(litG) else litG.coerceIn(0f, 1f).pow(1f / 2.2f)
+            val outB = if (engineProfile.useFilmicToneMapping) linearToSrgb(litB) else litB.coerceIn(0f, 1f).pow(1f / 2.2f)
+
+            val shadedColor = Color(outR, outG, outB, c.alpha)
 
             if (wireframe) {
+                reusablePath.reset()
+                reusablePath.moveTo(tri.p1.x, tri.p1.y)
+                reusablePath.lineTo(tri.p2.x, tri.p2.y)
+                reusablePath.lineTo(tri.p3.x, tri.p3.y)
+                reusablePath.close()
                 drawScope.drawPath(
                     path = reusablePath,
                     color = tri.baseColor.copy(alpha = 0.9f),
                     style = strokeStyle
                 )
+                continue
+            }
+
+            // TRUE PER-PIXEL / PER-FRAGMENT OCCLUSION PIPELINE
+            if (hasDepthBuffer && depthMap != null) {
+                // Triangle screen bounding box
+                val minX = minOf(tri.p1.x, tri.p2.x, tri.p3.x).coerceIn(0f, width)
+                val maxX = maxOf(tri.p1.x, tri.p2.x, tri.p3.x).coerceIn(0f, width)
+                val minY = minOf(tri.p1.y, tri.p2.y, tri.p3.y).coerceIn(0f, height)
+                val maxY = maxOf(tri.p1.y, tri.p2.y, tri.p3.y).coerceIn(0f, height)
+
+                val minVirtZ = minOf(tri.z1, tri.z2, tri.z3)
+                val maxVirtZ = maxOf(tri.z1, tri.z2, tri.z3)
+
+                // Quick regional test at bounding vertices
+                val uC = screenUOffset + ((minX + maxX) * 0.5f / width) * screenUScale
+                val vC = (minY + maxY) * 0.5f / height
+                val sampleCenterRealDepth = depthMap.getDepthMetersAt(uC, vC)
+
+                // If fully unoccluded in region, render whole path fast
+                if (sampleCenterRealDepth >= 20.0f || minVirtZ < (sampleCenterRealDepth - 0.05f)) {
+                    reusablePath.reset()
+                    reusablePath.moveTo(tri.p1.x, tri.p1.y)
+                    reusablePath.lineTo(tri.p2.x, tri.p2.y)
+                    reusablePath.lineTo(tri.p3.x, tri.p3.y)
+                    reusablePath.close()
+                    drawScope.drawPath(path = reusablePath, color = shadedColor)
+                } else {
+                    // Fragment / Scanline Rasterization with Per-Pixel Physical Depth Test
+                    spanPath.reset()
+                    val startY = minY.toInt()
+                    val endY = maxY.toInt()
+                    val stepY = if (endY - startY > 120) 2 else 1
+                    var hasVisibleFragments = false
+
+                    val x1 = tri.p1.x; val y1 = tri.p1.y; val z1 = tri.z1
+                    val x2 = tri.p2.x; val y2 = tri.p2.y; val z2 = tri.z2
+                    val x3 = tri.p3.x; val y3 = tri.p3.y; val z3 = tri.z3
+
+                    // Scanline edge interpolation
+                    for (yInt in startY..endY step stepY) {
+                        val y = yInt.toFloat() + 0.5f
+                        var xA = Float.MAX_VALUE; var xB = -Float.MAX_VALUE
+                        var zA = 0f; var zB = 0f
+
+                        // Edge 1-2
+                        if ((y1 <= y && y < y2) || (y2 <= y && y < y1)) {
+                            val t = (y - y1) / (y2 - y1)
+                            val x = x1 + t * (x2 - x1)
+                            val z = z1 + t * (z2 - z1)
+                            if (x < xA) { xA = x; zA = z }
+                            if (x > xB) { xB = x; zB = z }
+                        }
+                        // Edge 2-3
+                        if ((y2 <= y && y < y3) || (y3 <= y && y < y2)) {
+                            val t = (y - y2) / (y3 - y2)
+                            val x = x2 + t * (x3 - x2)
+                            val z = z2 + t * (z3 - z2)
+                            if (x < xA) { xA = x; zA = z }
+                            if (x > xB) { xB = x; zB = z }
+                        }
+                        // Edge 3-1
+                        if ((y3 <= y && y < y1) || (y1 <= y && y < y3)) {
+                            val t = (y - y3) / (y1 - y3)
+                            val x = x3 + t * (x1 - x3)
+                            val z = z3 + t * (z1 - z3)
+                            if (x < xA) { xA = x; zA = z }
+                            if (x > xB) { xB = x; zB = z }
+                        }
+
+                        if (xA <= xB) {
+                            val startX = xA.coerceIn(0f, width)
+                            val endX = xB.coerceIn(0f, width)
+                            val spanLen = endX - startX
+                            if (spanLen > 0.5f) {
+                                val stepX = if (spanLen > 80f) 2f else 1f
+                                var currentSpanStart = -1f
+                                var curX = startX
+                                while (curX <= endX) {
+                                    val t = if (xB > xA) (curX - xA) / (xB - xA) else 0f
+                                    val fragZ = (1f - t) * zA + t * zB
+                                    val uScreen = screenUOffset + (curX / width) * screenUScale
+                                    val vScreen = y / height
+                                    val realDepth = depthMap.getDepthMetersAt(uScreen, vScreen)
+
+                                    val isPixelOccluded = realDepth < 20.0f && fragZ > (realDepth + 0.02f)
+
+                                    if (!isPixelOccluded) {
+                                        if (currentSpanStart < 0f) currentSpanStart = curX
+                                        hasVisibleFragments = true
+                                    } else {
+                                        if (currentSpanStart >= 0f) {
+                                            spanPath.moveTo(currentSpanStart, y)
+                                            spanPath.lineTo(curX, y)
+                                            currentSpanStart = -1f
+                                        }
+                                    }
+                                    curX += stepX
+                                }
+                                if (currentSpanStart >= 0f) {
+                                    spanPath.moveTo(currentSpanStart, y)
+                                    spanPath.lineTo(endX, y)
+                                }
+                            }
+                        }
+                    }
+
+                    if (hasVisibleFragments) {
+                        drawScope.drawPath(
+                            path = spanPath,
+                            color = shadedColor,
+                            style = Stroke(width = stepY.toFloat() + 0.5f)
+                        )
+                    }
+                }
             } else {
-                val c = tri.baseColor
-                val ec = tri.emissiveColor
-                val metallic = tri.metallic
-
-                val linR = srgbToLinear(c.red)
-                val linG = srgbToLinear(c.green)
-                val linB = srgbToLinear(c.blue)
-
-                val dielectricDiffuse = (1.0f - metallic).coerceIn(0.0f, 1.0f)
-                val diffR = linR * tri.diffuseIrradiance.x * dielectricDiffuse
-                val diffG = linG * tri.diffuseIrradiance.y * dielectricDiffuse
-                val diffB = linB * tri.diffuseIrradiance.z * dielectricDiffuse
-
-                val f0R = 0.04f * (1.0f - metallic) + linR * metallic
-                val f0G = 0.04f * (1.0f - metallic) + linG * metallic
-                val f0B = 0.04f * (1.0f - metallic) + linB * metallic
-
-                val specR = tri.specularRadiance.x * f0R
-                val specG = tri.specularRadiance.y * f0G
-                val specB = tri.specularRadiance.z * f0B
-
-                val linEmissiveR = srgbToLinear(ec.red) * ec.alpha
-                val linEmissiveG = srgbToLinear(ec.green) * ec.alpha
-                val linEmissiveB = srgbToLinear(ec.blue) * ec.alpha
-
-                val litR = diffR + specR + linEmissiveR
-                val litG = diffG + specG + linEmissiveG
-                val litB = diffB + specB + linEmissiveB
-
-                val outR = if (engineProfile.useFilmicToneMapping) linearToSrgb(litR) else litR.coerceIn(0f, 1f).pow(1f / 2.2f)
-                val outG = if (engineProfile.useFilmicToneMapping) linearToSrgb(litG) else litG.coerceIn(0f, 1f).pow(1f / 2.2f)
-                val outB = if (engineProfile.useFilmicToneMapping) linearToSrgb(litB) else litB.coerceIn(0f, 1f).pow(1f / 2.2f)
-
-                val shadedColor = Color(outR, outG, outB, c.alpha)
+                // No depth buffer active -> standard unoccluded PBR drawing
+                reusablePath.reset()
+                reusablePath.moveTo(tri.p1.x, tri.p1.y)
+                reusablePath.lineTo(tri.p2.x, tri.p2.y)
+                reusablePath.lineTo(tri.p3.x, tri.p3.y)
+                reusablePath.close()
                 drawScope.drawPath(path = reusablePath, color = shadedColor)
             }
         }
@@ -635,6 +743,9 @@ class Renderer3D {
         val p1: Offset,
         val p2: Offset,
         val p3: Offset,
+        val z1: Float = 0f,
+        val z2: Float = 0f,
+        val z3: Float = 0f,
         val avgZ: Float,
         val diffuseIrradiance: Vec3,
         val specularRadiance: Vec3,
