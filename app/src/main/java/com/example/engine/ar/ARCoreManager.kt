@@ -1208,9 +1208,9 @@ class ARCoreManager(private val context: Context) {
                     val srcHeight = depthImage.height
                     val rowStride = planes[0].rowStride
 
-                    // Extract high-performance 160x120 depth grid for per-pixel occlusion
-                    val targetW = 160
-                    val targetH = 120
+                    // Extract high-resolution 320x240 depth grid for high-precision per-pixel visual occlusion
+                    val targetW = min(320, srcWidth)
+                    val targetH = min(240, srcHeight)
                     val depthGrid = ShortArray(targetW * targetH)
 
                     var sumDepthMeters = 0.0
