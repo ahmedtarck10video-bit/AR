@@ -128,8 +128,9 @@ data class ARFaceMeshTracking(
     val foreheadRightPose: Vec3 = Vec3(0.04f, 0.06f, 0.98f),
     val landmarksCount: Int = 468,
     val landmarkMeshPoints: List<Vec3> = emptyList(),
-    val leftEyeOpenRatio: Float = 1.0f,
-    val rightEyeOpenRatio: Float = 1.0f
+    val leftEyeOpenRatio: Float? = null,
+    val rightEyeOpenRatio: Float? = null,
+    val isEyeMetricsAvailable: Boolean = false
 )
 
 data class ARDepthFusionInfo(
@@ -311,6 +312,7 @@ data class ARFrameSnapshot(
 
 data class ARStereoEyeState(
     val isStereoReady: Boolean = false,
+    val timestampNs: Long = 0L,
     val focalLengthX: Float = 0f,
     val focalLengthY: Float = 0f,
     val principalPointX: Float = 0f,

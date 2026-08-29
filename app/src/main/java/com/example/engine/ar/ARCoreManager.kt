@@ -753,6 +753,33 @@ class ARCoreManager(private val context: Context) {
                         meshPoints.add(Vec3(worldPose.tx(), worldPose.ty(), worldPose.tz()))
                     }
 
+                    // Compute true eye openness metrics from 468 3D landmarks (never use constant placeholders)
+                    val (leftEyeRatio, rightEyeRatio, hasEyeMetrics) = if (totalVerts >= 400) {
+                        try {
+                            fun getV(idx: Int): Vec3 {
+                                val vx = verticesBuffer.get(idx * 3)
+                                val vy = verticesBuffer.get(idx * 3 + 1)
+                                val vz = verticesBuffer.get(idx * 3 + 2)
+                                return Vec3(vx, vy, vz)
+                            }
+                            val lTop = getV(159)
+                            val lBot = getV(145)
+                            val rTop = getV(386)
+                            val rBot = getV(374)
+
+                            val lDist = sqrt(((lTop.x - lBot.x) * (lTop.x - lBot.x) + (lTop.y - lBot.y) * (lTop.y - lBot.y) + (lTop.z - lBot.z) * (lTop.z - lBot.z)).toDouble()).toFloat()
+                            val rDist = sqrt(((rTop.x - rBot.x) * (rTop.x - rBot.x) + (rTop.y - rBot.y) * (rTop.y - rBot.y) + (rTop.z - rBot.z) * (rTop.z - rBot.z)).toDouble()).toFloat()
+
+                            val lRatio = ((lDist - 0.002f) / (0.010f - 0.002f)).coerceIn(0.0f, 1.0f)
+                            val rRatio = ((rDist - 0.002f) / (0.010f - 0.002f)).coerceIn(0.0f, 1.0f)
+                            Triple(lRatio, rRatio, true)
+                        } catch (e: Exception) {
+                            Triple(null, null, false)
+                        }
+                    } else {
+                        Triple(null, null, false)
+                    }
+
                     _faceMeshTracking.value = ARFaceMeshTracking(
                         isTracking = true,
                         faceCenterPose = centerVec,
@@ -761,8 +788,9 @@ class ARCoreManager(private val context: Context) {
                         foreheadRightPose = Vec3(foreheadRightPose.tx(), foreheadRightPose.ty(), foreheadRightPose.tz()),
                         landmarksCount = totalVerts,
                         landmarkMeshPoints = meshPoints,
-                        leftEyeOpenRatio = 1.0f,
-                        rightEyeOpenRatio = 1.0f
+                        leftEyeOpenRatio = leftEyeRatio,
+                        rightEyeOpenRatio = rightEyeRatio,
+                        isEyeMetricsAvailable = hasEyeMetrics
                     )
                 } else {
                     _faceMeshTracking.value = _faceMeshTracking.value.copy(isTracking = false)
@@ -947,9 +975,10 @@ class ARCoreManager(private val context: Context) {
             val vergenceRad = atan2(halfIpd.toDouble(), convergenceDist.toDouble())
             val vergence: Float = (vergenceRad * 180.0 / Math.PI).toFloat()
 
-            // True Left/Right Eye World Poses
-            val leftEyePose = camPose.compose(Pose.makeTranslation(-halfIpd, 0f, 0f))
-            val rightEyePose = camPose.compose(Pose.makeTranslation(+halfIpd, 0f, 0f))
+            // True Left/Right Eye World Poses using ARCore's display-oriented geometry
+            val displayPose = try { camera.displayOrientedPose } catch (e: Exception) { camPose }
+            val leftEyePose = displayPose.compose(Pose.makeTranslation(-halfIpd, 0f, 0f))
+            val rightEyePose = displayPose.compose(Pose.makeTranslation(+halfIpd, 0f, 0f))
 
             // Compute 4x4 View Matrices
             val leftEyeTransform = FloatArray(16)
@@ -978,8 +1007,9 @@ class ARCoreManager(private val context: Context) {
             camera.getProjectionMatrix(arcoreBaseProj, 0, near, far)
 
             // 2. Derive Rigorous Off-Axis Asymmetric Stereo Projection for Left and Right Eyes
-            // Shear factor based on IPD half-separation and convergence distance
-            val stereoShear = (halfIpd) / convergenceDist
+            // Shear factor based on optical focal scale, IPD half-separation, and convergence distance
+            val projScaleX = kotlin.math.abs(arcoreBaseProj[0])
+            val stereoShear = projScaleX * (halfIpd / convergenceDist)
 
             val leftProjM = arcoreBaseProj.clone().apply {
                 // Apply horizontal optical shear directly to element [8] (P[0][2] in OpenGL 4x4 column-major)
@@ -994,6 +1024,7 @@ class ARCoreManager(private val context: Context) {
 
             _stereoEyeState.value = ARStereoEyeState(
                 isStereoReady = isTracking,
+                timestampNs = frame.timestamp,
                 focalLengthX = fx,
                 focalLengthY = fy,
                 principalPointX = cx,

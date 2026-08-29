@@ -408,6 +408,7 @@ class Renderer3D {
         viewMatrix: FloatArray,
         projectionMatrix: FloatArray,
         depthMap: com.example.engine.ar.ARDepthMapBuffer? = null,
+        cameraTimestampNs: Long = 0L,
         depthOcclusionThresholdMeters: Float = 0f,
         screenUOffset: Float = 0f,
         screenUScale: Float = 1f,
@@ -447,7 +448,7 @@ class Renderer3D {
         val vEye2 = FloatArray(4)
         val vEye3 = FloatArray(4)
 
-        val hasDepthBuffer = depthMap != null && depthMap.isValid
+        val hasDepthBuffer = depthMap != null && depthMap.isValid && depthMap.isFresh(cameraTimestampNs)
 
         for (i in 0 until totalTriangles step renderStride) {
             val tri = allTriangles[i]
@@ -503,11 +504,6 @@ class Renderer3D {
             val eyeDepth2 = -vEye2[2]
             val eyeDepth3 = -vEye3[2]
             val avgEyeDepth = (eyeDepth1 + eyeDepth2 + eyeDepth3) * 0.33333334f
-
-            // Secondary fallback threshold check if enabled
-            if (depthOcclusionThresholdMeters > 0.1f && avgEyeDepth > depthOcclusionThresholdMeters) {
-                continue
-            }
 
             // Normal in model space transformed to world space using rotation portion of modelMatrix
             val nx = modelMatrix[0] * tri.normal.x + modelMatrix[4] * tri.normal.y + modelMatrix[8] * tri.normal.z
@@ -623,109 +619,91 @@ class Renderer3D {
                 val minY = minOf(tri.p1.y, tri.p2.y, tri.p3.y).coerceIn(0f, height)
                 val maxY = maxOf(tri.p1.y, tri.p2.y, tri.p3.y).coerceIn(0f, height)
 
-                val minVirtZ = minOf(tri.z1, tri.z2, tri.z3)
-                val maxVirtZ = maxOf(tri.z1, tri.z2, tri.z3)
+                // Fragment / Scanline Rasterization with Per-Pixel Physical Depth Test
+                spanPath.reset()
+                val startY = minY.toInt()
+                val endY = maxY.toInt()
+                val stepY = 1
+                var hasVisibleFragments = false
 
-                // Quick regional test at bounding vertices
-                val uC = screenUOffset + ((minX + maxX) * 0.5f / width) * screenUScale
-                val vC = (minY + maxY) * 0.5f / height
-                val sampleCenterRealDepth = depthMap.getDepthMetersAt(uC, vC)
+                val x1 = tri.p1.x; val y1 = tri.p1.y; val z1 = tri.z1
+                val x2 = tri.p2.x; val y2 = tri.p2.y; val z2 = tri.z2
+                val x3 = tri.p3.x; val y3 = tri.p3.y; val z3 = tri.z3
 
-                // If fully unoccluded in region, render whole path fast
-                if (sampleCenterRealDepth >= 20.0f || minVirtZ < (sampleCenterRealDepth - 0.05f)) {
-                    reusablePath.reset()
-                    reusablePath.moveTo(tri.p1.x, tri.p1.y)
-                    reusablePath.lineTo(tri.p2.x, tri.p2.y)
-                    reusablePath.lineTo(tri.p3.x, tri.p3.y)
-                    reusablePath.close()
-                    drawScope.drawPath(path = reusablePath, color = shadedColor)
-                } else {
-                    // Fragment / Scanline Rasterization with Per-Pixel Physical Depth Test
-                    spanPath.reset()
-                    val startY = minY.toInt()
-                    val endY = maxY.toInt()
-                    val stepY = if (endY - startY > 120) 2 else 1
-                    var hasVisibleFragments = false
+                // Scanline edge interpolation
+                for (yInt in startY..endY step stepY) {
+                    val y = yInt.toFloat() + 0.5f
+                    var xA = Float.MAX_VALUE; var xB = -Float.MAX_VALUE
+                    var zA = 0f; var zB = 0f
 
-                    val x1 = tri.p1.x; val y1 = tri.p1.y; val z1 = tri.z1
-                    val x2 = tri.p2.x; val y2 = tri.p2.y; val z2 = tri.z2
-                    val x3 = tri.p3.x; val y3 = tri.p3.y; val z3 = tri.z3
+                    // Edge 1-2
+                    if ((y1 <= y && y < y2) || (y2 <= y && y < y1)) {
+                        val t = (y - y1) / (y2 - y1)
+                        val x = x1 + t * (x2 - x1)
+                        val z = z1 + t * (z2 - z1)
+                        if (x < xA) { xA = x; zA = z }
+                        if (x > xB) { xB = x; zB = z }
+                    }
+                    // Edge 2-3
+                    if ((y2 <= y && y < y3) || (y3 <= y && y < y2)) {
+                        val t = (y - y2) / (y3 - y2)
+                        val x = x2 + t * (x3 - x2)
+                        val z = z2 + t * (z3 - z2)
+                        if (x < xA) { xA = x; zA = z }
+                        if (x > xB) { xB = x; zB = z }
+                    }
+                    // Edge 3-1
+                    if ((y3 <= y && y < y1) || (y1 <= y && y < y3)) {
+                        val t = (y - y3) / (y1 - y3)
+                        val x = x3 + t * (x1 - x3)
+                        val z = z3 + t * (z1 - z3)
+                        if (x < xA) { xA = x; zA = z }
+                        if (x > xB) { xB = x; zB = z }
+                    }
 
-                    // Scanline edge interpolation
-                    for (yInt in startY..endY step stepY) {
-                        val y = yInt.toFloat() + 0.5f
-                        var xA = Float.MAX_VALUE; var xB = -Float.MAX_VALUE
-                        var zA = 0f; var zB = 0f
+                    if (xA <= xB) {
+                        val startX = xA.coerceIn(0f, width)
+                        val endX = xB.coerceIn(0f, width)
+                        val spanLen = endX - startX
+                        if (spanLen > 0.5f) {
+                            val stepX = 1f
+                            var currentSpanStart = -1f
+                            var curX = startX
+                            while (curX <= endX) {
+                                val t = if (xB > xA) (curX - xA) / (xB - xA) else 0f
+                                val fragZ = (1f - t) * zA + t * zB
+                                val uScreen = screenUOffset + (curX / width) * screenUScale
+                                val vScreen = y / height
+                                val realDepth = depthMap.getDepthMetersAt(uScreen, vScreen, cameraTimestampNs)
 
-                        // Edge 1-2
-                        if ((y1 <= y && y < y2) || (y2 <= y && y < y1)) {
-                            val t = (y - y1) / (y2 - y1)
-                            val x = x1 + t * (x2 - x1)
-                            val z = z1 + t * (z2 - z1)
-                            if (x < xA) { xA = x; zA = z }
-                            if (x > xB) { xB = x; zB = z }
-                        }
-                        // Edge 2-3
-                        if ((y2 <= y && y < y3) || (y3 <= y && y < y2)) {
-                            val t = (y - y2) / (y3 - y2)
-                            val x = x2 + t * (x3 - x2)
-                            val z = z2 + t * (z3 - z2)
-                            if (x < xA) { xA = x; zA = z }
-                            if (x > xB) { xB = x; zB = z }
-                        }
-                        // Edge 3-1
-                        if ((y3 <= y && y < y1) || (y1 <= y && y < y3)) {
-                            val t = (y - y3) / (y1 - y3)
-                            val x = x3 + t * (x1 - x3)
-                            val z = z3 + t * (z1 - z3)
-                            if (x < xA) { xA = x; zA = z }
-                            if (x > xB) { xB = x; zB = z }
-                        }
+                                val isPixelOccluded = realDepth < 20.0f && fragZ > (realDepth + 0.02f)
 
-                        if (xA <= xB) {
-                            val startX = xA.coerceIn(0f, width)
-                            val endX = xB.coerceIn(0f, width)
-                            val spanLen = endX - startX
-                            if (spanLen > 0.5f) {
-                                val stepX = if (spanLen > 80f) 2f else 1f
-                                var currentSpanStart = -1f
-                                var curX = startX
-                                while (curX <= endX) {
-                                    val t = if (xB > xA) (curX - xA) / (xB - xA) else 0f
-                                    val fragZ = (1f - t) * zA + t * zB
-                                    val uScreen = screenUOffset + (curX / width) * screenUScale
-                                    val vScreen = y / height
-                                    val realDepth = depthMap.getDepthMetersAt(uScreen, vScreen)
-
-                                    val isPixelOccluded = realDepth < 20.0f && fragZ > (realDepth + 0.02f)
-
-                                    if (!isPixelOccluded) {
-                                        if (currentSpanStart < 0f) currentSpanStart = curX
-                                        hasVisibleFragments = true
-                                    } else {
-                                        if (currentSpanStart >= 0f) {
-                                            spanPath.moveTo(currentSpanStart, y)
-                                            spanPath.lineTo(curX, y)
-                                            currentSpanStart = -1f
-                                        }
+                                if (!isPixelOccluded) {
+                                    if (currentSpanStart < 0f) currentSpanStart = curX
+                                    hasVisibleFragments = true
+                                } else {
+                                    if (currentSpanStart >= 0f) {
+                                        spanPath.moveTo(currentSpanStart, y)
+                                        spanPath.lineTo(curX, y)
+                                        currentSpanStart = -1f
                                     }
-                                    curX += stepX
                                 }
-                                if (currentSpanStart >= 0f) {
-                                    spanPath.moveTo(currentSpanStart, y)
-                                    spanPath.lineTo(endX, y)
-                                }
+                                curX += stepX
+                            }
+                            if (currentSpanStart >= 0f) {
+                                spanPath.moveTo(currentSpanStart, y)
+                                spanPath.lineTo(endX, y)
                             }
                         }
                     }
+                }
 
-                    if (hasVisibleFragments) {
-                        drawScope.drawPath(
-                            path = spanPath,
-                            color = shadedColor,
-                            style = Stroke(width = stepY.toFloat() + 0.5f)
-                        )
-                    }
+                if (hasVisibleFragments) {
+                    drawScope.drawPath(
+                        path = spanPath,
+                        color = shadedColor,
+                        style = Stroke(width = 1.2f)
+                    )
                 }
             } else {
                 // No depth buffer active -> standard unoccluded PBR drawing

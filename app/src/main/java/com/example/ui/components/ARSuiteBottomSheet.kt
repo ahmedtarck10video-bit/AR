@@ -369,8 +369,11 @@ fun ARSuiteBottomSheet(
                                     )
                                 }
                                 val face = uiState.faceTracking
+                                val eyeText = if (face.isEyeMetricsAvailable && face.leftEyeOpenRatio != null && face.rightEyeOpenRatio != null) {
+                                    " | Eyes: L ${String.format("%.0f%%", face.leftEyeOpenRatio * 100f)} / R ${String.format("%.0f%%", face.rightEyeOpenRatio * 100f)}"
+                                } else ""
                                 Text(
-                                    text = if (face.isTracking) "Face Locked: 468 Landmarks Active | Nose Pose (Z: ${String.format("%.2f", face.noseTipPose.z)})" else "Face tracking inactive. Toggle switch to track selfie face mesh.",
+                                    text = if (face.isTracking) "Face Locked: ${face.landmarksCount} Landmarks Active | Nose (Z: ${String.format("%.2f", face.noseTipPose.z)}m)$eyeText" else "Face tracking inactive. Toggle switch to track selfie face mesh.",
                                     color = if (face.isTracking) Color(0xFF4CAF50) else Color.Gray,
                                     fontSize = 12.sp
                                 )
