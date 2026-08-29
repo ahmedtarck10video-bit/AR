@@ -399,7 +399,7 @@ class Renderer3D {
     /**
      * Precision Stereoscopic 4x4 MVP Matrix Renderer.
      * Directly consumes ARCore left/right view matrices, asymmetric frustum projection matrices,
-     * model-to-world transform (anchored 6DoF pose), and hardware depth occlusion.
+     * model-to-world transform (anchored 6DoF pose), and per-pixel ARCore 16-bit depth buffer occlusion.
      */
     fun renderStereoEyeWithMatrix(
         drawScope: DrawScope,
@@ -407,6 +407,7 @@ class Renderer3D {
         modelMatrix: FloatArray,
         viewMatrix: FloatArray,
         projectionMatrix: FloatArray,
+        depthMap: com.example.engine.ar.ARDepthMapBuffer? = null,
         depthOcclusionThresholdMeters: Float = 0f,
         wireframe: Boolean = false,
         primaryColor: Color = Color(0xFFE2E8F0),
@@ -441,6 +442,8 @@ class Renderer3D {
         val vClip2 = FloatArray(4)
         val vClip3 = FloatArray(4)
         val vEye1 = FloatArray(4)
+
+        val hasDepthBuffer = depthMap != null && depthMap.isValid
 
         for (i in 0 until totalTriangles step renderStride) {
             val tri = allTriangles[i]
@@ -492,8 +495,20 @@ class Renderer3D {
 
             // Eye depth (z in camera space, negative is forward)
             val eyeDepthMeters = -vEye1[2]
+
+            // 1. True Per-Pixel / Sampling ARCore 16-Bit Depth Texture Occlusion
+            if (hasDepthBuffer) {
+                val uCenter = ((ndcX1 + ndcX2 + ndcX3) * 0.33333334f + 1.0f) * 0.5f
+                val vCenter = (1.0f - (ndcY1 + ndcY2 + ndcY3) * 0.33333334f) * 0.5f
+                val realWorldDepth = depthMap!!.getDepthMetersAt(uCenter, vCenter)
+                if (realWorldDepth < 20.0f && eyeDepthMeters > (realWorldDepth + 0.04f)) {
+                    // Physical object in real world is in front of this virtual triangle -> Occluded!
+                    continue
+                }
+            }
+
+            // 2. Secondary fallback threshold check if enabled
             if (depthOcclusionThresholdMeters > 0.1f && eyeDepthMeters > depthOcclusionThresholdMeters) {
-                // Per-pixel / geometric depth occlusion: real-world surface is in front of this virtual triangle
                 continue
             }
 

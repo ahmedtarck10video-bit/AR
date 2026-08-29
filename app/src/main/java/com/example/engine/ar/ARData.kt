@@ -206,6 +206,63 @@ data class ARSurfaceAnchor(
     val hitResultCategory: ARHitResultCategory = if (arcoreAnchor != null) ARHitResultCategory.REAL_ARCORE_HIT else ARHitResultCategory.ESTIMATED_FALLBACK
 )
 
+data class ARDepthMapBuffer(
+    val width: Int = 0,
+    val height: Int = 0,
+    val depthMillimeters: ShortArray = ShortArray(0),
+    val timestampNs: Long = 0L,
+    val isValid: Boolean = false
+) {
+    /**
+     * Samples the real-world physical depth in meters at normalized UV coordinates (0.0 to 1.0).
+     * Returns Float.MAX_VALUE if sample is invalid or out of bounds.
+     */
+    fun getDepthMetersAt(u: Float, v: Float): Float {
+        if (!isValid || width <= 0 || height <= 0 || depthMillimeters.isEmpty()) return Float.MAX_VALUE
+        val x = (u.coerceIn(0f, 1f) * (width - 1)).toInt()
+        val y = (v.coerceIn(0f, 1f) * (height - 1)).toInt()
+        val index = y * width + x
+        if (index in depthMillimeters.indices) {
+            val mm = depthMillimeters[index].toInt() and 0xFFFF
+            if (mm in 100..20000) { // 10cm to 20m valid range
+                return mm / 1000.0f
+            }
+        }
+        return Float.MAX_VALUE
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as ARDepthMapBuffer
+        return width == other.width && height == other.height && timestampNs == other.timestampNs && isValid == other.isValid
+    }
+
+    override fun hashCode(): Int {
+        var result = width
+        result = 31 * result + height
+        result = 31 * result + timestampNs.hashCode()
+        result = 31 * result + isValid.hashCode()
+        return result
+    }
+}
+
+data class ARFrameSnapshot(
+    val timestampNs: Long = 0L,
+    val trackingQuality: ARTrackingStateQuality = ARTrackingStateQuality.INITIALIZING,
+    val cameraPoseMatrix: FloatArray = FloatArray(16),
+    val leftViewMatrix: FloatArray = FloatArray(16),
+    val rightViewMatrix: FloatArray = FloatArray(16),
+    val leftProjectionMatrix: FloatArray = FloatArray(16),
+    val rightProjectionMatrix: FloatArray = FloatArray(16),
+    val leftEyePose: Vec3 = Vec3(0f, 0f, 0f),
+    val rightEyePose: Vec3 = Vec3(0f, 0f, 0f),
+    val ipdMeters: Float = 0.064f,
+    val vergenceDegrees: Float = 0f,
+    val depthMap: ARDepthMapBuffer = ARDepthMapBuffer(),
+    val isTracking: Boolean = false
+)
+
 data class ARStereoEyeState(
     val isStereoReady: Boolean = false,
     val focalLengthX: Float = 0f,

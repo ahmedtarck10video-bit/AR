@@ -60,6 +60,7 @@ fun StereoARViewport(
     isAnchored: Boolean = false,
     ipdMeters: Float = 0.064f,
     stereoEyeState: ARStereoEyeState = ARStereoEyeState(),
+    depthMap: com.example.engine.ar.ARDepthMapBuffer = com.example.engine.ar.ARDepthMapBuffer(),
     isDepthOcclusionEnabled: Boolean = true,
     closestDepthDistanceMeters: Float = 0f,
     modifier: Modifier = Modifier
@@ -208,25 +209,34 @@ fun StereoARViewport(
         // When real ARCore eye matrices are ready, render true dual-eye stereoscopic projections
         if (stereoEyeState.isStereoReady && model != null && isAnchored && surfaceAnchor != null) {
             val liveAnchorPose = surfaceAnchor.arcoreAnchor?.pose
-            val anchorTx = liveAnchorPose?.tx() ?: surfaceAnchor.position.x
-            val anchorTy = liveAnchorPose?.ty() ?: surfaceAnchor.position.y
-            val anchorTz = liveAnchorPose?.tz() ?: surfaceAnchor.position.z
 
-            // Build 4x4 Model-to-World matrix from 6DoF physical anchor pose + user transforms
-            val modelMatrix = remember(anchorTx, anchorTy, anchorTz, rotX, rotY, rotZ, scale, panX, panY) {
-                val m = FloatArray(16)
-                android.opengl.Matrix.setIdentityM(m, 0)
-                android.opengl.Matrix.translateM(m, 0, anchorTx + panX * 0.001f, anchorTy - panY * 0.001f, anchorTz)
-                android.opengl.Matrix.rotateM(m, 0, rotY * 180f / Math.PI.toFloat(), 0f, 1f, 0f)
-                android.opengl.Matrix.rotateM(m, 0, rotX * 180f / Math.PI.toFloat(), 1f, 0f, 0f)
-                android.opengl.Matrix.rotateM(m, 0, rotZ * 180f / Math.PI.toFloat(), 0f, 0f, 1f)
-                android.opengl.Matrix.scaleM(m, 0, scale * 0.2f, scale * 0.2f, scale * 0.2f)
-                m
+            // Build 4x4 Model-to-World matrix directly from ARCore 6DoF Anchor Matrix multiplied with local transform
+            val modelMatrix = remember(liveAnchorPose, surfaceAnchor.position, rotX, rotY, rotZ, scale, panX, panY) {
+                val anchorM = FloatArray(16)
+                if (liveAnchorPose != null) {
+                    liveAnchorPose.toMatrix(anchorM, 0)
+                } else {
+                    android.opengl.Matrix.setIdentityM(anchorM, 0)
+                    android.opengl.Matrix.translateM(anchorM, 0, surfaceAnchor.position.x, surfaceAnchor.position.y, surfaceAnchor.position.z)
+                }
+
+                val localM = FloatArray(16)
+                android.opengl.Matrix.setIdentityM(localM, 0)
+                android.opengl.Matrix.translateM(localM, 0, panX * 0.001f, -panY * 0.001f, 0f)
+                android.opengl.Matrix.rotateM(localM, 0, rotY * 180f / Math.PI.toFloat(), 0f, 1f, 0f)
+                android.opengl.Matrix.rotateM(localM, 0, rotX * 180f / Math.PI.toFloat(), 1f, 0f, 0f)
+                android.opengl.Matrix.rotateM(localM, 0, rotZ * 180f / Math.PI.toFloat(), 0f, 0f, 1f)
+                android.opengl.Matrix.scaleM(localM, 0, scale * 0.2f, scale * 0.2f, scale * 0.2f)
+
+                val resultM = FloatArray(16)
+                android.opengl.Matrix.multiplyMM(resultM, 0, anchorM, 0, localM, 0)
+                resultM
             }
 
             val depthOcclusionDist = if (isDepthOcclusionEnabled && closestDepthDistanceMeters > 0.2f) {
                 closestDepthDistanceMeters
             } else 0f
+            val activeDepthMap = if (isDepthOcclusionEnabled) depthMap else null
 
             Row(modifier = Modifier.fillMaxSize()) {
                 // Left Eye Viewport (applies leftViewMatrix & leftProjectionMatrix)
@@ -238,6 +248,7 @@ fun StereoARViewport(
                             modelMatrix = modelMatrix,
                             viewMatrix = stereoEyeState.leftViewMatrix,
                             projectionMatrix = stereoEyeState.leftProjectionMatrix,
+                            depthMap = activeDepthMap,
                             depthOcclusionThresholdMeters = depthOcclusionDist,
                             wireframe = false,
                             primaryColor = Color(0xFF00E5FF),
@@ -256,6 +267,7 @@ fun StereoARViewport(
                             modelMatrix = modelMatrix,
                             viewMatrix = stereoEyeState.rightViewMatrix,
                             projectionMatrix = stereoEyeState.rightProjectionMatrix,
+                            depthMap = activeDepthMap,
                             depthOcclusionThresholdMeters = depthOcclusionDist,
                             wireframe = false,
                             primaryColor = Color(0xFF00E5FF),

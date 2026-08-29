@@ -179,6 +179,8 @@ data class MRUiState(
     val streetscapeMeshes: List<ARStreetscapeMesh> = emptyList(),
     val semanticDistribution: Map<SceneSemanticType, Float> = emptyMap(),
     val depthFusionInfo: ARDepthFusionInfo = ARDepthFusionInfo(),
+    val depthMap: ARDepthMapBuffer = ARDepthMapBuffer(),
+    val frameSnapshot: ARFrameSnapshot = ARFrameSnapshot(),
     val faceTracking: ARFaceMeshTracking = ARFaceMeshTracking(),
     val stereoEyeState: ARStereoEyeState = ARStereoEyeState(),
     val isFaceTrackingActive: Boolean = false,
@@ -301,6 +303,20 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             arCoreManager.stereoEyeState.collect { eyeState ->
                 _uiState.value = _uiState.value.copy(stereoEyeState = eyeState)
+            }
+        }
+
+        // Collect Depth Map Buffer for per-pixel depth occlusion
+        viewModelScope.launch {
+            arCoreManager.depthMapBuffer.collect { depthMap ->
+                _uiState.value = _uiState.value.copy(depthMap = depthMap)
+            }
+        }
+
+        // Collect Frame Snapshot for synchronized MR ocular rendering
+        viewModelScope.launch {
+            arCoreManager.frameSnapshot.collect { snapshot ->
+                _uiState.value = _uiState.value.copy(frameSnapshot = snapshot)
             }
         }
 

@@ -116,6 +116,12 @@ class ARCoreManager(private val context: Context) {
     private val _depthFusionInfo = MutableStateFlow(ARDepthFusionInfo())
     val depthFusionInfo: StateFlow<ARDepthFusionInfo> = _depthFusionInfo.asStateFlow()
 
+    private val _depthMapBuffer = MutableStateFlow(ARDepthMapBuffer())
+    val depthMapBuffer: StateFlow<ARDepthMapBuffer> = _depthMapBuffer.asStateFlow()
+
+    private val _frameSnapshot = MutableStateFlow(ARFrameSnapshot())
+    val frameSnapshot: StateFlow<ARFrameSnapshot> = _frameSnapshot.asStateFlow()
+
     private val _stereoEyeState = MutableStateFlow(ARStereoEyeState())
     val stereoEyeState: StateFlow<ARStereoEyeState> = _stereoEyeState.asStateFlow()
 
@@ -925,8 +931,10 @@ class ARCoreManager(private val context: Context) {
             // Compute 4x4 View Matrices
             val leftEyeTransform = FloatArray(16)
             val rightEyeTransform = FloatArray(16)
+            val camPoseTransform = FloatArray(16)
             val leftViewM = FloatArray(16)
             val rightViewM = FloatArray(16)
+            camPose.toMatrix(camPoseTransform, 0)
             leftEyePose.toMatrix(leftEyeTransform, 0)
             rightEyePose.toMatrix(rightEyeTransform, 0)
             Matrix.invertM(leftViewM, 0, leftEyeTransform, 0)
@@ -959,8 +967,10 @@ class ARCoreManager(private val context: Context) {
                 this[8] -= stereoShear
             }
 
+            val isTracking = (camera.trackingState == TrackingState.TRACKING)
+
             _stereoEyeState.value = ARStereoEyeState(
-                isStereoReady = (camera.trackingState == TrackingState.TRACKING),
+                isStereoReady = isTracking,
                 focalLengthX = fx,
                 focalLengthY = fy,
                 principalPointX = cx,
@@ -985,6 +995,23 @@ class ARCoreManager(private val context: Context) {
                 leftProjectionMatrix = leftProjM,
                 rightProjectionMatrix = rightProjM
             )
+
+            // Atomic Synchronized Frame Snapshot across camera, depth, eyes, and tracking
+            _frameSnapshot.value = ARFrameSnapshot(
+                timestampNs = frame.timestamp,
+                trackingQuality = _trackingQuality.value,
+                cameraPoseMatrix = camPoseTransform,
+                leftViewMatrix = leftViewM,
+                rightViewMatrix = rightViewM,
+                leftProjectionMatrix = leftProjM,
+                rightProjectionMatrix = rightProjM,
+                leftEyePose = Vec3(leftEyePose.tx(), leftEyePose.ty(), leftEyePose.tz()),
+                rightEyePose = Vec3(rightEyePose.tx(), rightEyePose.ty(), rightEyePose.tz()),
+                ipdMeters = ipd,
+                vergenceDegrees = vergence,
+                depthMap = _depthMapBuffer.value,
+                isTracking = isTracking
+            )
         } catch (e: Exception) {
             Log.w(TAG, "Error querying camera intrinsics for stereo", e)
         }
@@ -1001,6 +1028,12 @@ class ARCoreManager(private val context: Context) {
     // 3. COMPLETE SCENE SEMANTICS PIXEL-LEVEL IMAGE PROCESSING
     // =========================================================================
 
+    // Cache for real-time semantic pixel sampling
+    @Volatile
+    private var semanticBufferCache: ByteArray? = null
+    private var semanticWidth: Int = 0
+    private var semanticHeight: Int = 0
+
     private fun processSceneSemanticsBuffer(frame: Frame) {
         var semanticImage: Image? = null
         try {
@@ -1013,6 +1046,20 @@ class ARCoreManager(private val context: Context) {
                     val height = semanticImage.height
                     val rowStride = planes[0].rowStride
                     val pixelStride = planes[0].pixelStride
+
+                    // Cache downscaled semantic map for instantaneous UI / hit queries
+                    val cached = ByteArray(width * height)
+                    for (y in 0 until height) {
+                        for (x in 0 until width) {
+                            val idx = y * rowStride + x * pixelStride
+                            if (idx < buffer.limit()) {
+                                cached[y * width + x] = buffer.get(idx)
+                            }
+                        }
+                    }
+                    semanticBufferCache = cached
+                    semanticWidth = width
+                    semanticHeight = height
 
                     val counts = mutableMapOf<SceneSemanticType, Int>()
                     var sampleCount = 0
@@ -1051,6 +1098,24 @@ class ARCoreManager(private val context: Context) {
         }
     }
 
+    /**
+     * Queries the classified Scene Semantic at the given normalized screen UV coordinates (0.0 to 1.0).
+     */
+    fun getSemanticLabelAt(u: Float, v: Float): SceneSemanticType {
+        val buf = semanticBufferCache ?: return SceneSemanticType.UNLABELED
+        val w = semanticWidth
+        val h = semanticHeight
+        if (w <= 0 || h <= 0) return SceneSemanticType.UNLABELED
+        val px = (u.coerceIn(0f, 1f) * (w - 1)).toInt()
+        val py = (v.coerceIn(0f, 1f) * (h - 1)).toInt()
+        val idx = py * w + px
+        if (idx in buf.indices) {
+            val label = buf[idx].toInt() and 0xFF
+            return mapByteToSemanticType(label)
+        }
+        return SceneSemanticType.UNLABELED
+    }
+
     private fun mapByteToSemanticType(label: Int): SceneSemanticType {
         return when (label) {
             1 -> SceneSemanticType.SKY
@@ -1069,7 +1134,7 @@ class ARCoreManager(private val context: Context) {
     }
 
     // =========================================================================
-    // 6. COMPLETE GEOSPATIAL DEPTH FUSION
+    // 6. COMPLETE GEOSPATIAL DEPTH FUSION & PER-PIXEL DEPTH BUFFER
     // =========================================================================
 
     private fun processDepthFusion(frame: Frame) {
@@ -1085,24 +1150,30 @@ class ARCoreManager(private val context: Context) {
                 val planes = depthImage.planes
                 if (planes.isNotEmpty()) {
                     val buffer = planes[0].buffer
-                    val width = depthImage.width
-                    val height = depthImage.height
+                    val srcWidth = depthImage.width
+                    val srcHeight = depthImage.height
                     val rowStride = planes[0].rowStride
+
+                    // Extract high-performance 160x120 depth grid for per-pixel occlusion
+                    val targetW = 160
+                    val targetH = 120
+                    val depthGrid = ShortArray(targetW * targetH)
 
                     var sumDepthMeters = 0.0
                     var minDepthMeters = 99.0f
                     var validSamples = 0
 
-                    val stepX = max(1, width / 15)
-                    val stepY = max(1, height / 15)
-
-                    for (y in 0 until height step stepY) {
-                        for (x in 0 until width step stepX) {
-                            val byteIndex = y * rowStride + x * 2
+                    for (ty in 0 until targetH) {
+                        val sy = (ty.toFloat() / targetH * srcHeight).toInt().coerceIn(0, srcHeight - 1)
+                        for (tx in 0 until targetW) {
+                            val sx = (tx.toFloat() / targetW * srcWidth).toInt().coerceIn(0, srcWidth - 1)
+                            val byteIndex = sy * rowStride + sx * 2
                             if (byteIndex + 1 < buffer.limit()) {
-                                val depthMillimeters = (buffer.getShort(byteIndex).toInt() and 0xFFFF)
-                                if (depthMillimeters in 100..12000) { // 10cm to 12m valid range
-                                    val depthM = depthMillimeters / 1000.0f
+                                val depthMm = buffer.getShort(byteIndex)
+                                val depthInt = depthMm.toInt() and 0xFFFF
+                                depthGrid[ty * targetW + tx] = depthMm
+                                if (depthInt in 100..12000) {
+                                    val depthM = depthInt / 1000.0f
                                     sumDepthMeters += depthM
                                     if (depthM < minDepthMeters) minDepthMeters = depthM
                                     validSamples++
@@ -1110,6 +1181,14 @@ class ARCoreManager(private val context: Context) {
                             }
                         }
                     }
+
+                    _depthMapBuffer.value = ARDepthMapBuffer(
+                        width = targetW,
+                        height = targetH,
+                        depthMillimeters = depthGrid,
+                        timestampNs = frame.timestamp,
+                        isValid = true
+                    )
 
                     if (validSamples > 0) {
                         val avgDepth = (sumDepthMeters / validSamples).toFloat()
@@ -1127,6 +1206,8 @@ class ARCoreManager(private val context: Context) {
                     }
                 }
             }
+        } catch (e: NotYetAvailableException) {
+            // Depth frame not ready yet on this tick
         } catch (e: Exception) {
             Log.w(TAG, "Depth frame acquisition unavailable on current frame", e)
         } finally {
