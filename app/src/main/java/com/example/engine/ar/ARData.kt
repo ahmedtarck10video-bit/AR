@@ -211,16 +211,39 @@ data class ARDepthMapBuffer(
     val height: Int = 0,
     val depthMillimeters: ShortArray = ShortArray(0),
     val timestampNs: Long = 0L,
+    val displayRotation: Int = android.view.Surface.ROTATION_0,
     val isValid: Boolean = false
 ) {
     /**
-     * Samples the real-world physical depth in meters at normalized UV coordinates (0.0 to 1.0).
-     * Returns Float.MAX_VALUE if sample is invalid or out of bounds.
+     * Checks if the depth buffer is fresh relative to the camera frame timestamp.
      */
-    fun getDepthMetersAt(u: Float, v: Float): Float {
+    fun isFresh(cameraTimestampNs: Long, maxAgeNs: Long = 300_000_000L): Boolean {
+        if (!isValid || timestampNs == 0L || cameraTimestampNs == 0L) return isValid
+        return kotlin.math.abs(cameraTimestampNs - timestampNs) <= maxAgeNs
+    }
+
+    /**
+     * Samples the real-world physical depth in meters at normalized View/Screen UV coordinates (0.0 to 1.0),
+     * transforming screen-space UVs to camera image sensor coordinates based on display rotation.
+     * Returns Float.MAX_VALUE if sample is invalid, stale, or out of bounds.
+     */
+    fun getDepthMetersAt(uView: Float, vView: Float, cameraTimestampNs: Long = 0L): Float {
         if (!isValid || width <= 0 || height <= 0 || depthMillimeters.isEmpty()) return Float.MAX_VALUE
-        val x = (u.coerceIn(0f, 1f) * (width - 1)).toInt()
-        val y = (v.coerceIn(0f, 1f) * (height - 1)).toInt()
+        if (cameraTimestampNs > 0L && !isFresh(cameraTimestampNs)) return Float.MAX_VALUE
+
+        val uClamped = uView.coerceIn(0f, 1f)
+        val vClamped = vView.coerceIn(0f, 1f)
+
+        // Transform View/Screen Normalized Coordinates to Camera Sensor Image Normalized Coordinates
+        val (uImg, vImg) = when (displayRotation) {
+            android.view.Surface.ROTATION_90 -> Pair(uClamped, vClamped)
+            android.view.Surface.ROTATION_270 -> Pair(1.0f - uClamped, 1.0f - vClamped)
+            android.view.Surface.ROTATION_180 -> Pair(1.0f - vClamped, uClamped)
+            else /* ROTATION_0 (Portrait) */ -> Pair(vClamped, 1.0f - uClamped)
+        }
+
+        val x = (uImg.coerceIn(0f, 1f) * (width - 1)).toInt()
+        val y = (vImg.coerceIn(0f, 1f) * (height - 1)).toInt()
         val index = y * width + x
         if (index in depthMillimeters.indices) {
             val mm = depthMillimeters[index].toInt() and 0xFFFF
@@ -235,13 +258,14 @@ data class ARDepthMapBuffer(
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
         other as ARDepthMapBuffer
-        return width == other.width && height == other.height && timestampNs == other.timestampNs && isValid == other.isValid
+        return width == other.width && height == other.height && timestampNs == other.timestampNs && displayRotation == other.displayRotation && isValid == other.isValid
     }
 
     override fun hashCode(): Int {
         var result = width
         result = 31 * result + height
         result = 31 * result + timestampNs.hashCode()
+        result = 31 * result + displayRotation
         result = 31 * result + isValid.hashCode()
         return result
     }

@@ -521,8 +521,31 @@ class ARCoreManager(private val context: Context) {
         _pointCloud.value = emptyList()
     }
 
+    // Display geometry tracking for accurate coordinate transformation
+    @Volatile
+    var currentDisplayRotation: Int = android.view.Surface.ROTATION_0
+        private set
+    @Volatile
+    var currentViewportWidth: Int = 1920
+        private set
+    @Volatile
+    var currentViewportHeight: Int = 1080
+        private set
+
+    fun setDisplayGeometry(rotation: Int, width: Int, height: Int) {
+        currentDisplayRotation = rotation
+        currentViewportWidth = width
+        currentViewportHeight = height
+        try {
+            session?.setDisplayGeometry(rotation, width, height)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error updating display geometry in ARCore session", e)
+        }
+    }
+
     fun pause() {
         currentFrame = null
+        _depthMapBuffer.value = ARDepthMapBuffer() // Clear depth map to prevent stale occlusion
         try {
             session?.pause()
         } catch (e: Exception) {
@@ -1187,6 +1210,7 @@ class ARCoreManager(private val context: Context) {
                         height = targetH,
                         depthMillimeters = depthGrid,
                         timestampNs = frame.timestamp,
+                        displayRotation = currentDisplayRotation,
                         isValid = true
                     )
 
@@ -1903,6 +1927,22 @@ class ARCoreManager(private val context: Context) {
             _trackingStatus.value = "Playback failed: ${e.localizedMessage}"
             start() // recover live session
             false
+        }
+    }
+
+    fun stopPlayback(): Boolean {
+        val currentSession = session ?: return false
+        return try {
+            pause()
+            currentSession.setPlaybackDatasetUri(null)
+            start()
+            _trackingStatus.value = "Live AR session resumed"
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to stop playback, recreating session", e)
+            destroy()
+            start()
+            true
         }
     }
 

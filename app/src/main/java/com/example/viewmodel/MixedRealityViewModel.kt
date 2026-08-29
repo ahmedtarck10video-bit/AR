@@ -919,6 +919,13 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    fun stopPlayback() {
+        val success = arCoreManager.stopPlayback()
+        if (success) {
+            showNotification("Returned to live AR camera feed 📷")
+        }
+    }
+
     fun toggleSpatialAudio() {
         _uiState.value = _uiState.value.copy(spatialAudioEnabled = !_uiState.value.spatialAudioEnabled)
     }

@@ -88,7 +88,7 @@ fun StereoARViewport(
 
     Box(modifier = modifier.fillMaxSize().background(Color.Transparent)) {
         // =====================================================================
-        // 1. MASTER ARCORE SESSION & FILAMENT PBR ENGINE WITH HARDWARE DEPTH
+        // 1. MASTER ARCORE SESSION & CAMERA PASSTHROUGH (NO DUPLICATE MODEL)
         // =====================================================================
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -114,92 +114,7 @@ fun StereoARViewport(
             update = { arSceneView ->
                 arSceneViewRef = arSceneView
                 arSceneView.cameraStream?.isDepthOcclusionEnabled = isDepthOcclusionEnabled
-                val targetModel = model
-                val targetPath = targetModel?.localFilePath ?: targetModel?.fileUri?.toString()
-                val isModelPlaced = surfaceAnchor != null && isAnchored
-                val liveAnchorPose = surfaceAnchor?.arcoreAnchor?.pose
-
-                // World-Space Model Placement (Exact Anchor Position with Metric Pan)
-                val finalPosition: Position
-                val finalRotation: Rotation
-
-                if (isModelPlaced && surfaceAnchor != null) {
-                    val isVertical = surfaceAnchor.surfaceType == PlaneOrientation.VERTICAL
-                    val localDx = panX * 0.001f
-                    val localDy = if (isVertical) -panY * 0.001f else 0f
-                    val localDz = if (!isVertical) panY * 0.001f else 0f
-
-                    if (liveAnchorPose != null) {
-                        val offsetPose = com.google.ar.core.Pose.makeTranslation(localDx, localDy, localDz)
-                        val yawPose = com.google.ar.core.Pose.makeRotation(
-                            0f,
-                            kotlin.math.sin(rotY * Math.PI.toFloat() / 360f),
-                            0f,
-                            kotlin.math.cos(rotY * Math.PI.toFloat() / 360f)
-                        )
-                        val combinedPose = liveAnchorPose.compose(offsetPose).compose(yawPose)
-                        finalPosition = Position(combinedPose.tx(), combinedPose.ty(), combinedPose.tz())
-                        finalRotation = Rotation(
-                            x = rotX * 180f / Math.PI.toFloat(),
-                            y = rotY,
-                            z = rotZ * 180f / Math.PI.toFloat()
-                        )
-                    } else {
-                        finalPosition = Position(
-                            surfaceAnchor.position.x + localDx,
-                            surfaceAnchor.position.y + localDy,
-                            surfaceAnchor.position.z + localDz
-                        )
-                        finalRotation = Rotation(
-                            x = rotX * 180f / Math.PI.toFloat(),
-                            y = rotY,
-                            z = rotZ * 180f / Math.PI.toFloat()
-                        )
-                    }
-                } else {
-                    finalPosition = Position(0f, -1000f, 0f)
-                    finalRotation = Rotation(0f, 0f, 0f)
-                }
-
-                if (targetModel != null && targetPath != null && targetPath != lastLoadedPath) {
-                    lastLoadedPath = targetPath
-                    coroutineScope.launch {
-                        try {
-                            val file = targetModel.localFilePath?.let { File(it) }
-                            val instance = if (file != null && file.exists()) {
-                                arSceneView.modelLoader.createModelInstance(file)
-                            } else if (targetModel.fileUri != null) {
-                                arSceneView.modelLoader.loadModelInstance(targetModel.fileUri.toString())
-                            } else null
-
-                            if (instance != null) {
-                                modelNode?.let {
-                                    arSceneView.removeChildNode(it)
-                                    it.destroy()
-                                }
-                                val node = ModelNode(instance).apply {
-                                    this.position = finalPosition
-                                    this.scale = Scale(scale, scale, scale)
-                                    this.rotation = finalRotation
-                                    this.isVisible = isModelPlaced
-                                }
-                                arSceneView.addChildNode(node)
-                                modelNode = node
-                            }
-                        } catch (e: Exception) {
-                            android.util.Log.e("StereoARViewport", "Error loading AR model instance", e)
-                        }
-                    }
-                } else {
-                    modelNode?.let { node ->
-                        node.isVisible = isModelPlaced
-                        if (isModelPlaced) {
-                            node.position = finalPosition
-                            node.scale = Scale(scale, scale, scale)
-                            node.rotation = finalRotation
-                        }
-                    }
-                }
+                arSceneView.planeRenderer.isVisible = !isAnchored
             }
         )
 
