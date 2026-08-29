@@ -68,6 +68,8 @@ fun ARScreen(
                 scale = uiState.scale,
                 panX = uiState.panX,
                 panY = uiState.panY,
+                surfaceAnchor = uiState.surfaceAnchor,
+                isAnchored = uiState.arAnchorPlaced,
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) {
