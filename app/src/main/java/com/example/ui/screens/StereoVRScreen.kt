@@ -77,6 +77,9 @@ fun StereoVRScreen(
                 surfaceAnchor = uiState.surfaceAnchor,
                 isAnchored = uiState.arAnchorPlaced,
                 ipdMeters = uiState.ipdDistance,
+                stereoEyeState = uiState.stereoEyeState,
+                isDepthOcclusionEnabled = uiState.isDepthOcclusion,
+                closestDepthDistanceMeters = uiState.depthFusionInfo.closestObjectDistanceMeters,
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) {

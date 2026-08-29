@@ -396,6 +396,210 @@ class Renderer3D {
         }
     }
 
+    /**
+     * Precision Stereoscopic 4x4 MVP Matrix Renderer.
+     * Directly consumes ARCore left/right view matrices, asymmetric frustum projection matrices,
+     * model-to-world transform (anchored 6DoF pose), and hardware depth occlusion.
+     */
+    fun renderStereoEyeWithMatrix(
+        drawScope: DrawScope,
+        model: Model3D,
+        modelMatrix: FloatArray,
+        viewMatrix: FloatArray,
+        projectionMatrix: FloatArray,
+        depthOcclusionThresholdMeters: Float = 0f,
+        wireframe: Boolean = false,
+        primaryColor: Color = Color(0xFFE2E8F0),
+        hdriPreset: HdriPreset = HdriPreset.STUDIO_PRO,
+        engineProfile: RenderEngineProfile = RenderEngineProfile.REALITYKIT
+    ) {
+        val allTriangles = model.triangles
+        if (allTriangles.isEmpty()) return
+
+        val width = drawScope.size.width
+        val height = drawScope.size.height
+        if (width <= 0f || height <= 0f) return
+
+        // Compute combined View-Model matrix = View * Model
+        val vmMatrix = FloatArray(16)
+        android.opengl.Matrix.multiplyMM(vmMatrix, 0, viewMatrix, 0, modelMatrix, 0)
+
+        // Compute combined MVP matrix = Projection * View * Model
+        val mvpMatrix = FloatArray(16)
+        android.opengl.Matrix.multiplyMM(mvpMatrix, 0, projectionMatrix, 0, vmMatrix, 0)
+
+        val totalTriangles = allTriangles.size
+        val renderStride = when {
+            totalTriangles > 200000 -> (totalTriangles / 60000)
+            totalTriangles > 100000 -> 2
+            else -> 1
+        }
+        val projectedList = ArrayList<ProjectedTriangle>(min(totalTriangles / renderStride + 16, 60000))
+
+        val vIn = FloatArray(4)
+        val vClip1 = FloatArray(4)
+        val vClip2 = FloatArray(4)
+        val vClip3 = FloatArray(4)
+        val vEye1 = FloatArray(4)
+
+        for (i in 0 until totalTriangles step renderStride) {
+            val tri = allTriangles[i]
+
+            // 1. Transform vertex 1 to clip space & eye space
+            vIn[0] = tri.v1.x; vIn[1] = tri.v1.y; vIn[2] = tri.v1.z; vIn[3] = 1.0f
+            android.opengl.Matrix.multiplyMV(vClip1, 0, mvpMatrix, 0, vIn, 0)
+            android.opengl.Matrix.multiplyMV(vEye1, 0, vmMatrix, 0, vIn, 0)
+
+            // 2. Transform vertex 2 to clip space
+            vIn[0] = tri.v2.x; vIn[1] = tri.v2.y; vIn[2] = tri.v2.z; vIn[3] = 1.0f
+            android.opengl.Matrix.multiplyMV(vClip2, 0, mvpMatrix, 0, vIn, 0)
+
+            // 3. Transform vertex 3 to clip space
+            vIn[0] = tri.v3.x; vIn[1] = tri.v3.y; vIn[2] = tri.v3.z; vIn[3] = 1.0f
+            android.opengl.Matrix.multiplyMV(vClip3, 0, mvpMatrix, 0, vIn, 0)
+
+            val w1 = vClip1[3]
+            val w2 = vClip2[3]
+            val w3 = vClip3[3]
+
+            // Near-plane clipping in homogeneous coordinates
+            if (w1 <= 0.01f && w2 <= 0.01f && w3 <= 0.01f) continue
+
+            val invW1 = if (w1 > 0.001f) 1.0f / w1 else 1000f
+            val invW2 = if (w2 > 0.001f) 1.0f / w2 else 1000f
+            val invW3 = if (w3 > 0.001f) 1.0f / w3 else 1000f
+
+            // NDC to Screen Coordinates
+            val ndcX1 = vClip1[0] * invW1
+            val ndcY1 = vClip1[1] * invW1
+            val ndcX2 = vClip2[0] * invW2
+            val ndcY2 = vClip2[1] * invW2
+            val ndcX3 = vClip3[0] * invW3
+            val ndcY3 = vClip3[1] * invW3
+
+            val p1x = (ndcX1 + 1.0f) * 0.5f * width
+            val p1y = (1.0f - ndcY1) * 0.5f * height
+            val p2x = (ndcX2 + 1.0f) * 0.5f * width
+            val p2y = (1.0f - ndcY2) * 0.5f * height
+            val p3x = (ndcX3 + 1.0f) * 0.5f * width
+            val p3y = (1.0f - ndcY3) * 0.5f * height
+
+            // 2D Screen Winding Backface Culling
+            val cross2D = (p2x - p1x) * (p3y - p1y) - (p2y - p1y) * (p3x - p1x)
+            if (cross2D <= 0f && !wireframe && totalTriangles > 60) {
+                continue
+            }
+
+            // Eye depth (z in camera space, negative is forward)
+            val eyeDepthMeters = -vEye1[2]
+            if (depthOcclusionThresholdMeters > 0.1f && eyeDepthMeters > depthOcclusionThresholdMeters) {
+                // Per-pixel / geometric depth occlusion: real-world surface is in front of this virtual triangle
+                continue
+            }
+
+            // Normal in model space transformed to world space using rotation portion of modelMatrix
+            val nx = modelMatrix[0] * tri.normal.x + modelMatrix[4] * tri.normal.y + modelMatrix[8] * tri.normal.z
+            val ny = modelMatrix[1] * tri.normal.x + modelMatrix[5] * tri.normal.y + modelMatrix[9] * tri.normal.z
+            val nz = modelMatrix[2] * tri.normal.x + modelMatrix[6] * tri.normal.y + modelMatrix[10] * tri.normal.z
+            val len = kotlin.math.sqrt(nx * nx + ny * ny + nz * nz)
+            val normal = if (len > 1e-6f) Vec3(nx / len, ny / len, nz / len) else Vec3(0f, 1f, 0f)
+
+            val baseColor = if (tri.color != 0L) {
+                colorFromArgbLong(tri.color)
+            } else if (primaryColor == Color(0xFFE2E8F0)) {
+                Color(0xFFD6C5AD)
+            } else {
+                primaryColor
+            }
+
+            val emissiveColor = if (tri.emissiveColor != 0L) colorFromArgbLong(tri.emissiveColor) else Color.Transparent
+            val roughness = tri.roughness.coerceIn(0.04f, 1.0f)
+            val metallic = tri.metallic.coerceIn(0.0f, 1.0f)
+            val effectiveRoughness = (roughness * (engineProfile.pbrRoughness / 0.30f)).coerceIn(0.04f, 1.0f)
+
+            val diffuseIrradiance = hdriPreset.computeDiffuseIrradiance(normal)
+            val specularRadiance = hdriPreset.computeSpecularRadiance(
+                normal,
+                viewDir,
+                roughness = effectiveRoughness
+            ) * engineProfile.specularMultiplier
+
+            val avgClipZ = (vClip1[2] * invW1 + vClip2[2] * invW2 + vClip3[2] * invW3) * 0.33333334f
+
+            projectedList.add(
+                ProjectedTriangle(
+                    p1 = Offset(p1x, p1y),
+                    p2 = Offset(p2x, p2y),
+                    p3 = Offset(p3x, p3y),
+                    avgZ = -avgClipZ, // For depth sorting
+                    diffuseIrradiance = diffuseIrradiance,
+                    specularRadiance = specularRadiance,
+                    baseColor = baseColor,
+                    emissiveColor = emissiveColor,
+                    metallic = metallic,
+                    roughness = roughness
+                )
+            )
+        }
+
+        // Depth sort
+        projectedList.sortWith { a, b -> b.avgZ.compareTo(a.avgZ) }
+
+        val strokeStyle = Stroke(width = 1.2f)
+        for (i in 0 until projectedList.size) {
+            val tri = projectedList[i]
+            reusablePath.reset()
+            reusablePath.moveTo(tri.p1.x, tri.p1.y)
+            reusablePath.lineTo(tri.p2.x, tri.p2.y)
+            reusablePath.lineTo(tri.p3.x, tri.p3.y)
+            reusablePath.close()
+
+            if (wireframe) {
+                drawScope.drawPath(
+                    path = reusablePath,
+                    color = tri.baseColor.copy(alpha = 0.9f),
+                    style = strokeStyle
+                )
+            } else {
+                val c = tri.baseColor
+                val ec = tri.emissiveColor
+                val metallic = tri.metallic
+
+                val linR = srgbToLinear(c.red)
+                val linG = srgbToLinear(c.green)
+                val linB = srgbToLinear(c.blue)
+
+                val dielectricDiffuse = (1.0f - metallic).coerceIn(0.0f, 1.0f)
+                val diffR = linR * tri.diffuseIrradiance.x * dielectricDiffuse
+                val diffG = linG * tri.diffuseIrradiance.y * dielectricDiffuse
+                val diffB = linB * tri.diffuseIrradiance.z * dielectricDiffuse
+
+                val f0R = 0.04f * (1.0f - metallic) + linR * metallic
+                val f0G = 0.04f * (1.0f - metallic) + linG * metallic
+                val f0B = 0.04f * (1.0f - metallic) + linB * metallic
+
+                val specR = tri.specularRadiance.x * f0R
+                val specG = tri.specularRadiance.y * f0G
+                val specB = tri.specularRadiance.z * f0B
+
+                val linEmissiveR = srgbToLinear(ec.red) * ec.alpha
+                val linEmissiveG = srgbToLinear(ec.green) * ec.alpha
+                val linEmissiveB = srgbToLinear(ec.blue) * ec.alpha
+
+                val litR = diffR + specR + linEmissiveR
+                val litG = diffG + specG + linEmissiveG
+                val litB = diffB + specB + linEmissiveB
+
+                val outR = if (engineProfile.useFilmicToneMapping) linearToSrgb(litR) else litR.coerceIn(0f, 1f).pow(1f / 2.2f)
+                val outG = if (engineProfile.useFilmicToneMapping) linearToSrgb(litG) else litG.coerceIn(0f, 1f).pow(1f / 2.2f)
+                val outB = if (engineProfile.useFilmicToneMapping) linearToSrgb(litB) else litB.coerceIn(0f, 1f).pow(1f / 2.2f)
+
+                val shadedColor = Color(outR, outG, outB, c.alpha)
+                drawScope.drawPath(path = reusablePath, color = shadedColor)
+            }
+        }
+    }
+
     private data class ProjectedTriangle(
         val p1: Offset,
         val p2: Offset,

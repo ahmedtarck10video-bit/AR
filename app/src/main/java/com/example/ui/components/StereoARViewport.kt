@@ -18,6 +18,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.example.engine.HdriPreset
+import com.example.engine.RenderEngineProfile
+import com.example.engine.Renderer3D
+import com.example.engine.ar.ARStereoEyeState
 import com.example.engine.ar.ARSurfaceAnchor
 import com.example.engine.ar.PlaneOrientation
 import com.example.math3d.Model3D
@@ -39,8 +43,9 @@ import java.io.File
  * 2. 6DoF World-Space Anchor Positioning: Model sits strictly at real physical anchor coordinates.
  * 3. Dynamic IPD Baseline & True Optical Vergence calculated from anchor distance.
  * 4. Hardware Depth Occlusion (Config.DepthMode.AUTOMATIC) & Environmental HDR Lighting on Filament PBR.
- * 5. Instant Camera Passthrough with Zero Black Frame delay.
- * 6. Precision Stereoscopic Ocular Optics HUD with dynamic optical baseline division.
+ * 5. Left/Right Eye MVP Matrix Application: Passes exact 4x4 View and Projection matrices to dual ocular pipelines.
+ * 6. Instant Camera Passthrough with Zero Black Frame delay.
+ * 7. Precision Stereoscopic Ocular Optics HUD with dynamic optical baseline division.
  */
 @Composable
 fun StereoARViewport(
@@ -54,12 +59,16 @@ fun StereoARViewport(
     surfaceAnchor: ARSurfaceAnchor? = null,
     isAnchored: Boolean = false,
     ipdMeters: Float = 0.064f,
+    stereoEyeState: ARStereoEyeState = ARStereoEyeState(),
+    isDepthOcclusionEnabled: Boolean = true,
+    closestDepthDistanceMeters: Float = 0f,
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
     var modelNode by remember { mutableStateOf<ModelNode?>(null) }
     var arSceneViewRef by remember { mutableStateOf<ARSceneView?>(null) }
     var lastLoadedPath by remember { mutableStateOf<String?>(null) }
+    val renderer3D = remember { Renderer3D() }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -78,7 +87,7 @@ fun StereoARViewport(
 
     Box(modifier = modifier.fillMaxSize().background(Color.Transparent)) {
         // =====================================================================
-        // SINGLE MASTER ARCORE SESSION & FILAMENT PBR ENGINE
+        // 1. MASTER ARCORE SESSION & FILAMENT PBR ENGINE WITH HARDWARE DEPTH
         // =====================================================================
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -86,7 +95,7 @@ fun StereoARViewport(
                 ARSceneView(ctx).apply {
                     planeRenderer.isVisible = !isAnchored
                     planeRenderer.isEnabled = true
-                    cameraStream?.isDepthOcclusionEnabled = true
+                    cameraStream?.isDepthOcclusionEnabled = isDepthOcclusionEnabled
                     sessionConfiguration = { session, config ->
                         config.depthMode = if (session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
                             Config.DepthMode.AUTOMATIC
@@ -103,6 +112,7 @@ fun StereoARViewport(
             },
             update = { arSceneView ->
                 arSceneViewRef = arSceneView
+                arSceneView.cameraStream?.isDepthOcclusionEnabled = isDepthOcclusionEnabled
                 val targetModel = model
                 val targetPath = targetModel?.localFilePath ?: targetModel?.fileUri?.toString()
                 val isModelPlaced = surfaceAnchor != null && isAnchored
@@ -193,14 +203,79 @@ fun StereoARViewport(
         )
 
         // =====================================================================
-        // STEREOSCOPIC DUAL-EYE OPTICAL OVERLAY & SEPARATION DIVISION
+        // 2. DUAL-EYE STEREOSCOPIC MATRIX PIPELINE (LEFT EYE & RIGHT EYE)
+        // =====================================================================
+        // When real ARCore eye matrices are ready, render true dual-eye stereoscopic projections
+        if (stereoEyeState.isStereoReady && model != null && isAnchored && surfaceAnchor != null) {
+            val liveAnchorPose = surfaceAnchor.arcoreAnchor?.pose
+            val anchorTx = liveAnchorPose?.tx() ?: surfaceAnchor.position.x
+            val anchorTy = liveAnchorPose?.ty() ?: surfaceAnchor.position.y
+            val anchorTz = liveAnchorPose?.tz() ?: surfaceAnchor.position.z
+
+            // Build 4x4 Model-to-World matrix from 6DoF physical anchor pose + user transforms
+            val modelMatrix = remember(anchorTx, anchorTy, anchorTz, rotX, rotY, rotZ, scale, panX, panY) {
+                val m = FloatArray(16)
+                android.opengl.Matrix.setIdentityM(m, 0)
+                android.opengl.Matrix.translateM(m, 0, anchorTx + panX * 0.001f, anchorTy - panY * 0.001f, anchorTz)
+                android.opengl.Matrix.rotateM(m, 0, rotY * 180f / Math.PI.toFloat(), 0f, 1f, 0f)
+                android.opengl.Matrix.rotateM(m, 0, rotX * 180f / Math.PI.toFloat(), 1f, 0f, 0f)
+                android.opengl.Matrix.rotateM(m, 0, rotZ * 180f / Math.PI.toFloat(), 0f, 0f, 1f)
+                android.opengl.Matrix.scaleM(m, 0, scale * 0.2f, scale * 0.2f, scale * 0.2f)
+                m
+            }
+
+            val depthOcclusionDist = if (isDepthOcclusionEnabled && closestDepthDistanceMeters > 0.2f) {
+                closestDepthDistanceMeters
+            } else 0f
+
+            Row(modifier = Modifier.fillMaxSize()) {
+                // Left Eye Viewport (applies leftViewMatrix & leftProjectionMatrix)
+                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        renderer3D.renderStereoEyeWithMatrix(
+                            drawScope = this,
+                            model = model,
+                            modelMatrix = modelMatrix,
+                            viewMatrix = stereoEyeState.leftViewMatrix,
+                            projectionMatrix = stereoEyeState.leftProjectionMatrix,
+                            depthOcclusionThresholdMeters = depthOcclusionDist,
+                            wireframe = false,
+                            primaryColor = Color(0xFF00E5FF),
+                            hdriPreset = HdriPreset.STUDIO_PRO,
+                            engineProfile = RenderEngineProfile.REALITYKIT
+                        )
+                    }
+                }
+
+                // Right Eye Viewport (applies rightViewMatrix & rightProjectionMatrix)
+                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        renderer3D.renderStereoEyeWithMatrix(
+                            drawScope = this,
+                            model = model,
+                            modelMatrix = modelMatrix,
+                            viewMatrix = stereoEyeState.rightViewMatrix,
+                            projectionMatrix = stereoEyeState.rightProjectionMatrix,
+                            depthOcclusionThresholdMeters = depthOcclusionDist,
+                            wireframe = false,
+                            primaryColor = Color(0xFF00E5FF),
+                            hdriPreset = HdriPreset.STUDIO_PRO,
+                            engineProfile = RenderEngineProfile.REALITYKIT
+                        )
+                    }
+                }
+            }
+        }
+
+        // =====================================================================
+        // 3. STEREOSCOPIC DUAL-EYE OPTICAL OVERLAY & CENTRAL SEPARATION
         // =====================================================================
         Canvas(modifier = Modifier.fillMaxSize()) {
             val w = size.width
             val h = size.height
             val midX = w / 2f
 
-            // Optical Center Divider Line (prevents binocular crosstalk)
+            // Central Optical Divider Line (prevents binocular crosstalk)
             drawLine(
                 color = Color(0x6600E5FF),
                 start = Offset(midX, 0f),
@@ -254,7 +329,7 @@ fun StereoARViewport(
         }
 
         // =====================================================================
-        // HUD TELEMETRY LABELS
+        // 4. HUD TELEMETRY LABELS WITH REAL-TIME EYE MATRICES STATUS
         // =====================================================================
         Row(
             modifier = Modifier
@@ -271,14 +346,14 @@ fun StereoARViewport(
             ) {
                 Column {
                     Text(
-                        text = "L EYE [MR 6DoF]",
+                        text = "L EYE [MR 6DoF MATRIX]",
                         color = NeonCyan,
                         fontWeight = FontWeight.Bold,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace
                     )
                     Text(
-                        text = "Offset: -${(ipdMeters * 500).toInt()}mm",
+                        text = "Offset: -${(ipdMeters * 500).toInt()}mm | Depth Occlusion: ${if (isDepthOcclusionEnabled) "ON" else "OFF"}",
                         color = Color.White.copy(alpha = 0.8f),
                         fontSize = 9.sp,
                         fontFamily = FontFamily.Monospace
@@ -295,14 +370,14 @@ fun StereoARViewport(
             ) {
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = "R EYE [MR 6DoF]",
+                        text = "R EYE [MR 6DoF MATRIX]",
                         color = NeonCyan,
                         fontWeight = FontWeight.Bold,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace
                     )
                     Text(
-                        text = "Offset: +${(ipdMeters * 500).toInt()}mm",
+                        text = "Offset: +${(ipdMeters * 500).toInt()}mm | Vergence: ${String.format("%.1f°", stereoEyeState.vergenceDegrees)}",
                         color = Color.White.copy(alpha = 0.8f),
                         fontSize = 9.sp,
                         fontFamily = FontFamily.Monospace
@@ -312,3 +387,4 @@ fun StereoARViewport(
         }
     }
 }
+
