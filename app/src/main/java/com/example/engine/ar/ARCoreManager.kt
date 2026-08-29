@@ -115,6 +115,9 @@ class ARCoreManager(private val context: Context) {
     private val _depthFusionInfo = MutableStateFlow(ARDepthFusionInfo())
     val depthFusionInfo: StateFlow<ARDepthFusionInfo> = _depthFusionInfo.asStateFlow()
 
+    private val _stereoEyeState = MutableStateFlow(ARStereoEyeState())
+    val stereoEyeState: StateFlow<ARStereoEyeState> = _stereoEyeState.asStateFlow()
+
     private val _cloudAnchorStatus = MutableStateFlow<String?>(null)
     val cloudAnchorStatus: StateFlow<String?> = _cloudAnchorStatus.asStateFlow()
 
@@ -881,6 +884,36 @@ class ARCoreManager(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.w(TAG, "Error querying light estimate", e)
+        }
+
+        // 10. Real ARCore Camera Intrinsics & Stereoscopic 6DoF Eye Metrics
+        try {
+            val intrinsics = camera.imageIntrinsics
+            val fLength = intrinsics.focalLength
+            val pPoint = intrinsics.principalPoint
+            val dims = intrinsics.imageDimensions
+            val camPose = camera.pose
+            val ipd = 0.064f // Default 64mm IPD
+            val halfIpd = ipd * 0.5f
+            val vergence = kotlin.math.atan2(halfIpd, 1.5f) * 180f / Math.PI.toFloat()
+
+            _stereoEyeState.value = ARStereoEyeState(
+                isStereoReady = (camera.trackingState == TrackingState.TRACKING),
+                focalLengthX = if (fLength.isNotEmpty()) fLength[0] else 500f,
+                focalLengthY = if (fLength.size > 1) fLength[1] else 500f,
+                principalPointX = if (pPoint.isNotEmpty()) pPoint[0] else (dims[0] / 2f),
+                principalPointY = if (pPoint.size > 1) pPoint[1] else (dims[1] / 2f),
+                imageWidth = if (dims.isNotEmpty()) dims[0] else 1920,
+                imageHeight = if (dims.size > 1) dims[1] else 1080,
+                ipdMeters = ipd,
+                vergenceDegrees = vergence,
+                eyeSeparationMeters = halfIpd,
+                cameraPoseTx = camPose.tx(),
+                cameraPoseTy = camPose.ty(),
+                cameraPoseTz = camPose.tz()
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Error querying camera intrinsics for stereo", e)
         }
 
         val count = planeList.size

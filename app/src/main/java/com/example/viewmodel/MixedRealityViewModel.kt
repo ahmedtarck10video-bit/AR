@@ -180,6 +180,7 @@ data class MRUiState(
     val semanticDistribution: Map<SceneSemanticType, Float> = emptyMap(),
     val depthFusionInfo: ARDepthFusionInfo = ARDepthFusionInfo(),
     val faceTracking: ARFaceMeshTracking = ARFaceMeshTracking(),
+    val stereoEyeState: ARStereoEyeState = ARStereoEyeState(),
     val isFaceTrackingActive: Boolean = false,
     val persistentAnchors: List<PersistentARAnchorData> = emptyList(),
     val recordedSessions: List<RecordedSessionItem> = emptyList(),
@@ -293,6 +294,13 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             arCoreManager.faceMeshTracking.collect { faceInfo ->
                 _uiState.value = _uiState.value.copy(faceTracking = faceInfo)
+            }
+        }
+
+        // Collect Stereo Eye State
+        viewModelScope.launch {
+            arCoreManager.stereoEyeState.collect { eyeState ->
+                _uiState.value = _uiState.value.copy(stereoEyeState = eyeState)
             }
         }
 

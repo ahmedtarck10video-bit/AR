@@ -205,3 +205,19 @@ data class ARSurfaceAnchor(
     val hitType: ARHitType = if (arcoreAnchor != null) ARHitType.PLANE_POLYGON else ARHitType.GEOMETRIC_FALLBACK,
     val hitResultCategory: ARHitResultCategory = if (arcoreAnchor != null) ARHitResultCategory.REAL_ARCORE_HIT else ARHitResultCategory.ESTIMATED_FALLBACK
 )
+
+data class ARStereoEyeState(
+    val isStereoReady: Boolean = false,
+    val focalLengthX: Float = 0f,
+    val focalLengthY: Float = 0f,
+    val principalPointX: Float = 0f,
+    val principalPointY: Float = 0f,
+    val imageWidth: Int = 0,
+    val imageHeight: Int = 0,
+    val ipdMeters: Float = 0.064f,
+    val vergenceDegrees: Float = 0f,
+    val eyeSeparationMeters: Float = 0.032f,
+    val cameraPoseTx: Float = 0f,
+    val cameraPoseTy: Float = 0f,
+    val cameraPoseTz: Float = 0f
+)

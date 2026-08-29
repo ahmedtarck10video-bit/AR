@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,8 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import com.example.ui.components.Sceneview3DViewport
-import com.example.ui.components.StereoDualCameraPreview
+import com.example.ui.components.StereoARViewport
 import com.example.ui.components.GlassCard
 import com.example.ui.theme.NeonCyan
 import com.example.viewmodel.MRUiState
@@ -58,22 +58,38 @@ fun StereoVRScreen(
     val headRoll = uiState.sensorOrientation.roll * 0.02f
     val headYaw = uiState.sensorOrientation.yaw * 0.02f
 
-    // True Optical Stereoscopic Separation & Vergence (Physical IPD in meters)
-    val focalDistanceMeters = 1.5f
-    val halfIpd = uiState.ipdDistance * 0.5f // Metric baseline half-separation
-    val vergenceDeg = kotlin.math.atan2(halfIpd, focalDistanceMeters) * 180f / Math.PI.toFloat()
-    val eyeSeparationPan = halfIpd * 120f // Physical optical parallax translation
-
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
         if (hasCameraPermission) {
-            // Live Stereo Dual Viewport for Mixed Reality (MR / VR)
-            StereoDualCameraPreview(
+            // Live Hardware-Accelerated Stereoscopic Mixed Reality AR Viewport
+            StereoARViewport(
+                model = currentModel,
+                rotX = uiState.rotX + headPitch,
+                rotY = uiState.rotY + headRoll,
+                rotZ = headYaw,
+                scale = uiState.scale * (uiState.surfaceAnchor?.scale ?: 1.0f),
+                panX = uiState.panX,
+                panY = uiState.panY,
+                surfaceAnchor = uiState.surfaceAnchor,
+                isAnchored = uiState.arAnchorPlaced,
+                ipdMeters = uiState.ipdDistance,
                 modifier = Modifier
                     .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { offset ->
+                                val normX = offset.x / size.width.toFloat()
+                                val normY = offset.y / size.height.toFloat()
+                                viewModel.onSurfaceTapped(normX, normY)
+                            },
+                            onDoubleTap = {
+                                viewModel.resetPosition()
+                            }
+                        )
+                    }
                     .pointerInput(Unit) {
                         detectTransformGestures { _, pan, zoom, rotation ->
                             if (pan.x != 0f || pan.y != 0f) {
@@ -86,47 +102,7 @@ fun StereoVRScreen(
                                 viewModel.updateRotation(0f, rotation * 0.02f)
                             }
                         }
-                    },
-                leftOverlay = {
-                    Sceneview3DViewport(
-                        model = currentModel,
-                        rotX = uiState.rotX + headPitch,
-                        rotY = uiState.rotY + headRoll + vergenceDeg,
-                        rotZ = headYaw,
-                        scale = uiState.scale * 0.85f,
-                        panX = uiState.panX - eyeSeparationPan,
-                        panY = uiState.panY,
-                        isTransparent = true,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    Text(
-                        text = "L Eye [MR Stereo]",
-                        color = NeonCyan.copy(alpha = 0.7f),
-                        modifier = Modifier.align(Alignment.TopStart).padding(12.dp),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp
-                    )
-                },
-                rightOverlay = {
-                    Sceneview3DViewport(
-                        model = currentModel,
-                        rotX = uiState.rotX + headPitch,
-                        rotY = uiState.rotY + headRoll - vergenceDeg,
-                        rotZ = headYaw,
-                        scale = uiState.scale * 0.85f,
-                        panX = uiState.panX + eyeSeparationPan,
-                        panY = uiState.panY,
-                        isTransparent = true,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    Text(
-                        text = "R Eye [MR Stereo]",
-                        color = NeonCyan.copy(alpha = 0.7f),
-                        modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp
-                    )
-                }
+                    }
             )
         } else {
             Box(
