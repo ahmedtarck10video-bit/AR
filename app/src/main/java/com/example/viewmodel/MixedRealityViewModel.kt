@@ -14,12 +14,14 @@ import com.example.engine.ar.*
 import com.example.math3d.Model3D
 import com.example.math3d.ModelFileLoader
 import com.example.math3d.Vec3
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 enum class SpatialMode(val title: String, val badge: String) {
@@ -200,14 +202,29 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
     val uiState: StateFlow<MRUiState> = _uiState.asStateFlow()
 
     init {
-        sensorTracker.start()
-
+        // In initial OBJECT mode, SensorTracker & ARCore are paused to eliminate background CPU/battery drain
         val defaultModels = com.example.math3d.MeshGenerator.getDefaultModels()
         _uiState.value = _uiState.value.copy(
             models = defaultModels,
             currentModel = defaultModels.firstOrNull(),
             selectedModelIndex = 0
         )
+
+        // Pre-export procedural default models to GLB on background IO dispatcher for instant GPU PBR rendering
+        viewModelScope.launch(Dispatchers.IO) {
+            val updatedModels = defaultModels.map { m ->
+                val glbPath = ModelFileLoader.exportTrianglesToGlbFile(application, m.name, m.triangles)
+                if (glbPath != null) {
+                    m.copy(localFilePath = glbPath, isGlbOrGltf = true, triangles = emptyList())
+                } else {
+                    m
+                }
+            }
+            _uiState.value = _uiState.value.copy(
+                models = updatedModels,
+                currentModel = updatedModels.getOrNull(_uiState.value.selectedModelIndex) ?: _uiState.value.currentModel
+            )
+        }
 
         // Collect hardware capabilities
         viewModelScope.launch {
@@ -216,14 +233,26 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
             }
         }
 
-        // Collect sensor updates
+        // Collect sensor updates with orientation change thresholding to prevent 200Hz StateFlow recomposition jank
+        var lastEmittedPitch = 0f
+        var lastEmittedRoll = 0f
+        var lastEmittedYaw = 0f
+
         viewModelScope.launch {
             sensorTracker.orientation.collect { orientation ->
-                _uiState.value = _uiState.value.copy(
-                    orientation = orientation,
-                    sensorOrientation = orientation
-                )
                 if (_uiState.value.currentMode != SpatialMode.OBJECT) {
+                    val dP = kotlin.math.abs(orientation.pitch - lastEmittedPitch)
+                    val dR = kotlin.math.abs(orientation.roll - lastEmittedRoll)
+                    val dY = kotlin.math.abs(orientation.yaw - lastEmittedYaw)
+                    if (dP > 0.005f || dR > 0.005f || dY > 0.005f) {
+                        lastEmittedPitch = orientation.pitch
+                        lastEmittedRoll = orientation.roll
+                        lastEmittedYaw = orientation.yaw
+                        _uiState.value = _uiState.value.copy(
+                            orientation = orientation,
+                            sensorOrientation = orientation
+                        )
+                    }
                     arCoreManager.updateFrame(orientation.pitch, orientation.roll, orientation.yaw)
                 }
             }
@@ -347,8 +376,10 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
     fun setMode(mode: SpatialMode) {
         _uiState.value = _uiState.value.copy(currentMode = mode)
         if (mode == SpatialMode.AR || mode == SpatialMode.MR) {
+            sensorTracker.start()
             arCoreManager.start()
         } else {
+            sensorTracker.stop()
             arCoreManager.pause()
         }
     }
@@ -942,7 +973,9 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoadingModel = true)
             try {
-                val loadedModel = ModelFileLoader.loadModelFromUri(context, uri)
+                val loadedModel = withContext(Dispatchers.IO) {
+                    ModelFileLoader.loadModelFromUri(context, uri)
+                }
                 if (loadedModel != null) {
                     val updatedList = _uiState.value.models + loadedModel
                     _uiState.value = _uiState.value.copy(

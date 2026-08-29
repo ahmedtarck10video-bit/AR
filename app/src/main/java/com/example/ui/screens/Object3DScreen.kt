@@ -45,15 +45,20 @@ fun Object3DScreen(
 ) {
     val currentModel = uiState.models.getOrNull(uiState.selectedModelIndex) ?: return
 
-    val infiniteTransition = rememberInfiniteTransition(label = "spin")
-    val spinAngle by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = if (uiState.isAutoSpin) 6.28318f else 0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 6000, easing = LinearEasing)
-        ),
-        label = "spinAngle"
-    )
+    val spinAngle = if (uiState.isAutoSpin) {
+        val infiniteTransition = rememberInfiniteTransition(label = "spin")
+        val angle by infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 6.28318f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 6000, easing = LinearEasing)
+            ),
+            label = "spinAngle"
+        )
+        angle
+    } else {
+        0f
+    }
 
     val colorPalette = listOf(
         Color(0xFF00E5FF),

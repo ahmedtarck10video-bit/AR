@@ -146,7 +146,7 @@ object ModelFileLoader {
                 Model3D(
                     name = displayName,
                     description = if (triangles.isNotEmpty()) "${centered.size} polygons loaded (${getFileFormatLabel(parsedTargetName)})" else "Hardware Accelerated 3D Model (${getFileFormatLabel(parsedTargetName)})",
-                    triangles = centered,
+                    triangles = if (glbFilePath != null) emptyList() else centered,
                     fileUri = uri,
                     localFilePath = glbFilePath,
                     isGlbOrGltf = true,

@@ -18,9 +18,13 @@ import androidx.core.content.ContextCompat
 import com.example.math3d.Vec3
 import com.google.ar.core.*
 import com.google.ar.core.exceptions.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.io.File
 import java.nio.FloatBuffer
 import java.util.*
@@ -172,10 +176,14 @@ class ARCoreManager(private val context: Context) {
         override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
     }
 
+    private val managerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     init {
-        checkAvailabilityAndCapabilities()
+        managerScope.launch(Dispatchers.IO) {
+            checkAvailabilityAndCapabilities()
+            refreshRecordedSessionsList()
+        }
         initLocationListener()
-        refreshRecordedSessionsList()
     }
 
     private fun getStablePlaneId(plane: Plane): String {
@@ -1088,6 +1096,17 @@ class ARCoreManager(private val context: Context) {
     private var semanticWidth: Int = 0
     private var semanticHeight: Int = 0
 
+    // Reusable buffers to eliminate per-frame GC heap allocation churn
+    private var semanticReusableBuffer: ByteArray? = null
+    private var depthGridReusable: ShortArray? = null
+    private val reusableViewCorners = floatArrayOf(
+        0f, 0f, // Top-Left
+        1f, 0f, // Top-Right
+        0f, 1f, // Bottom-Left
+        1f, 1f  // Bottom-Right
+    )
+    private val reusableImgCorners = FloatArray(8)
+
     private fun processSceneSemanticsBuffer(frame: Frame) {
         var semanticImage: Image? = null
         try {
@@ -1101,8 +1120,14 @@ class ARCoreManager(private val context: Context) {
                     val rowStride = planes[0].rowStride
                     val pixelStride = planes[0].pixelStride
 
-                    // Cache downscaled semantic map for instantaneous UI / hit queries
-                    val cached = ByteArray(width * height)
+                    // Cache downscaled semantic map for instantaneous UI / hit queries using reusable buffer
+                    val requiredSize = width * height
+                    val cached = if (semanticReusableBuffer?.size == requiredSize) {
+                        semanticReusableBuffer!!
+                    } else {
+                        ByteArray(requiredSize).also { semanticReusableBuffer = it }
+                    }
+
                     for (y in 0 until height) {
                         for (x in 0 until width) {
                             val idx = y * rowStride + x * pixelStride
@@ -1211,7 +1236,12 @@ class ARCoreManager(private val context: Context) {
                     // Extract high-resolution 320x240 depth grid for high-precision per-pixel visual occlusion
                     val targetW = min(320, srcWidth)
                     val targetH = min(240, srcHeight)
-                    val depthGrid = ShortArray(targetW * targetH)
+                    val requiredGridSize = targetW * targetH
+                    val depthGrid = if (depthGridReusable?.size == requiredGridSize) {
+                        depthGridReusable!!
+                    } else {
+                        ShortArray(requiredGridSize).also { depthGridReusable = it }
+                    }
 
                     var sumDepthMeters = 0.0
                     var minDepthMeters = 99.0f
@@ -1237,28 +1267,22 @@ class ARCoreManager(private val context: Context) {
                     }
 
                     // Compute exact 2D coordinate transformation from Normalized Screen/View to Image Coordinates
-                    val viewCorners = floatArrayOf(
-                        0f, 0f, // Top-Left
-                        1f, 0f, // Top-Right
-                        0f, 1f, // Bottom-Left
-                        1f, 1f  // Bottom-Right
-                    )
                     val imgCorners = FloatArray(8)
                     try {
                         frame.transformCoordinates2d(
                             Coordinates2d.VIEW_NORMALIZED,
-                            viewCorners,
+                            reusableViewCorners,
                             Coordinates2d.IMAGE_NORMALIZED,
                             imgCorners
                         )
                     } catch (e: Exception) {
-                        System.arraycopy(viewCorners, 0, imgCorners, 0, 8)
+                        System.arraycopy(reusableViewCorners, 0, imgCorners, 0, 8)
                     }
 
                     _depthMapBuffer.value = ARDepthMapBuffer(
                         width = targetW,
                         height = targetH,
-                        depthMillimeters = depthGrid,
+                        depthMillimeters = depthGrid.clone(),
                         timestampNs = frame.timestamp,
                         displayRotation = currentDisplayRotation,
                         viewToImageCorners = imgCorners,
