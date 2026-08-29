@@ -170,6 +170,7 @@ fun StereoARViewport(
                             screenUScale = 0.5f,
                             wireframe = false,
                             primaryColor = Color(0xFF00E5FF),
+                            depthOcclusionLevel = if (isDepthOcclusionEnabled) com.example.engine.DepthOcclusionLevel.MEDIUM else com.example.engine.DepthOcclusionLevel.OFF,
                             hdriPreset = HdriPreset.STUDIO_PRO,
                             engineProfile = RenderEngineProfile.REALITYKIT
                         )
@@ -192,6 +193,7 @@ fun StereoARViewport(
                             screenUScale = 0.5f,
                             wireframe = false,
                             primaryColor = Color(0xFF00E5FF),
+                            depthOcclusionLevel = if (isDepthOcclusionEnabled) com.example.engine.DepthOcclusionLevel.MEDIUM else com.example.engine.DepthOcclusionLevel.OFF,
                             hdriPreset = HdriPreset.STUDIO_PRO,
                             engineProfile = RenderEngineProfile.REALITYKIT
                         )
