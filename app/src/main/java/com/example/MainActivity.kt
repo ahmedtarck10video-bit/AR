@@ -40,7 +40,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.engine.ar.ARPlaneFilter
-import com.example.ui.components.CameraPreview
 import com.example.ui.components.Sceneview3DViewport
 import com.example.ui.components.SceneviewARViewport
 import com.example.ui.components.StereoDualCameraPreview

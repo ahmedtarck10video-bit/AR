@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
@@ -24,7 +23,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import com.example.ui.components.CameraPreview
 import com.example.ui.components.Sceneview3DViewport
 import com.example.ui.components.StereoDualCameraPreview
 import com.example.ui.components.GlassCard
@@ -60,11 +58,11 @@ fun StereoVRScreen(
     val headRoll = uiState.sensorOrientation.roll * 0.02f
     val headYaw = uiState.sensorOrientation.yaw * 0.02f
 
-    // True Optical Stereoscopic Vergence angle calculation (based on 1.5m focal plane)
+    // True Optical Stereoscopic Separation & Vergence (Physical IPD in meters)
     val focalDistanceMeters = 1.5f
-    val halfIpd = uiState.ipdDistance * 0.5f
+    val halfIpd = uiState.ipdDistance * 0.5f // Metric baseline half-separation
     val vergenceDeg = kotlin.math.atan2(halfIpd, focalDistanceMeters) * 180f / Math.PI.toFloat()
-    val eyeParallaxPixels = uiState.ipdDistance * 320f
+    val eyeSeparationPan = halfIpd * 120f // Physical optical parallax translation
 
     Box(
         modifier = modifier
@@ -72,7 +70,7 @@ fun StereoVRScreen(
             .background(Color.Black)
     ) {
         if (hasCameraPermission) {
-            // Live Stereo Dual Camera Passthrough for Mixed Reality (MR / VR)
+            // Live Stereo Dual Viewport for Mixed Reality (MR / VR)
             StereoDualCameraPreview(
                 modifier = Modifier
                     .fillMaxSize()
@@ -96,7 +94,7 @@ fun StereoVRScreen(
                         rotY = uiState.rotY + headRoll + vergenceDeg,
                         rotZ = headYaw,
                         scale = uiState.scale * 0.85f,
-                        panX = uiState.panX - eyeParallaxPixels,
+                        panX = uiState.panX - eyeSeparationPan,
                         panY = uiState.panY,
                         isTransparent = true,
                         modifier = Modifier.fillMaxSize()
@@ -116,7 +114,7 @@ fun StereoVRScreen(
                         rotY = uiState.rotY + headRoll - vergenceDeg,
                         rotZ = headYaw,
                         scale = uiState.scale * 0.85f,
-                        panX = uiState.panX + eyeParallaxPixels,
+                        panX = uiState.panX + eyeSeparationPan,
                         panY = uiState.panY,
                         isTransparent = true,
                         modifier = Modifier.fillMaxSize()
@@ -213,3 +211,4 @@ fun StereoVRScreen(
         }
     }
 }
+

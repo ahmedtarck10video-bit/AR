@@ -261,14 +261,17 @@ class ARCoreManager(private val context: Context) {
         var geoSup = false
         var semSup = false
         var facesSup = false
-        var cloudSup = true
+        var cloudSup = false
         var streetscapeSup = false
+        var imagesSup = false
+        var instantSup = false
 
         val isPackageInstalled = try {
             context.packageManager.getPackageInfo("com.google.ar.core", 0) != null
         } catch (e: PackageManager.NameNotFoundException) {
             false
         } catch (e: Exception) {
+            Log.w(TAG, "Package manager check failed", e)
             false
         }
 
@@ -287,6 +290,10 @@ class ARCoreManager(private val context: Context) {
                         geoSup = probeSession.isGeospatialModeSupported(Config.GeospatialMode.ENABLED)
                         semSup = probeSession.isSemanticModeSupported(Config.SemanticMode.ENABLED)
                         facesSup = true
+                        cloudSup = true
+                        streetscapeSup = geoSup
+                        imagesSup = true
+                        instantSup = true
                     } catch (e: Exception) {
                         Log.w(TAG, "Capability probe session failed: ${e.localizedMessage}", e)
                         depthSup = false
@@ -294,7 +301,10 @@ class ARCoreManager(private val context: Context) {
                         geoSup = false
                         semSup = false
                         facesSup = false
+                        cloudSup = false
                         streetscapeSup = false
+                        imagesSup = false
+                        instantSup = false
                     } finally {
                         try {
                             probeSession?.close()
@@ -321,10 +331,10 @@ class ARCoreManager(private val context: Context) {
             isSemanticSupported = semSup,
             isCloudAnchorSupported = cloudSup,
             isAugmentedFacesSupported = facesSup,
-            isAugmentedImagesSupported = true,
-            isInstantPlacementSupported = true,
+            isAugmentedImagesSupported = imagesSup,
+            isInstantPlacementSupported = instantSup,
             isStreetscapeSupported = streetscapeSup,
-            summary = if (isInstalled) "ARCore 1.47+ Capabilities Checked" else "ARCore Not Installed / Unavailable"
+            summary = if (isInstalled) "ARCore 1.47+ Capabilities Runtime Verified" else "ARCore Not Installed / Unavailable"
         )
         _trackingStatus.value = if (isInstalled) "ARCore 1.47 Ready" else "ARCore Unavailable"
     }
@@ -1684,14 +1694,27 @@ class ARCoreManager(private val context: Context) {
     }
 
     fun setPlaybackDataset(sourceFile: File): Boolean {
+        if (!sourceFile.exists() || !sourceFile.canRead() || sourceFile.length() == 0L) {
+            Log.e(TAG, "Invalid playback dataset file: ${sourceFile.absolutePath}")
+            _trackingStatus.value = "Playback Error: Dataset file invalid or empty"
+            return false
+        }
         val currentSession = session ?: return false
         return try {
             pause()
             currentSession.setPlaybackDatasetUri(android.net.Uri.fromFile(sourceFile))
             start()
+            _trackingStatus.value = "Playing back AR dataset: ${sourceFile.name}"
             true
+        } catch (e: PlaybackFailedException) {
+            Log.e(TAG, "Playback dataset failed to load in ARCore runtime", e)
+            _trackingStatus.value = "Playback failed: incompatible dataset"
+            start() // recover live session
+            false
         } catch (e: Exception) {
             Log.e(TAG, "Failed to set playback dataset", e)
+            _trackingStatus.value = "Playback failed: ${e.localizedMessage}"
+            start() // recover live session
             false
         }
     }

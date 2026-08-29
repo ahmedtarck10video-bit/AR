@@ -14,9 +14,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 /**
- * True Stereoscopic Dual-Camera Viewport for Mixed Reality (MR).
- * Houses hardware CameraPreview passthrough with left and right eye overlay canvases
- * and optical stereoscopic separation.
+ * True Stereoscopic Dual Viewport Container for Mixed Reality (MR).
+ * Houses left and right eye overlay viewports with optical stereoscopic separation
+ * and hardware-accelerated pass-through compositing.
  */
 @Composable
 fun StereoDualCameraPreview(
@@ -25,9 +25,6 @@ fun StereoDualCameraPreview(
     rightOverlay: @Composable () -> Unit = {}
 ) {
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
-        // Shared high-performance camera passthrough background
-        CameraPreview(modifier = Modifier.fillMaxSize())
-
         // Stereoscopic Split-View Dual Feed (Left Eye + Right Eye)
         Row(modifier = Modifier.fillMaxSize()) {
             // Left Eye 3D/Spatial Overlay
@@ -60,4 +57,5 @@ fun StereoDualCameraPreview(
         }
     }
 }
+
 

@@ -67,8 +67,8 @@ data class ARCoreCapabilities(
     val isSemanticSupported: Boolean = false,
     val isCloudAnchorSupported: Boolean = false,
     val isAugmentedFacesSupported: Boolean = false,
-    val isAugmentedImagesSupported: Boolean = true,
-    val isInstantPlacementSupported: Boolean = true,
+    val isAugmentedImagesSupported: Boolean = false,
+    val isInstantPlacementSupported: Boolean = false,
     val isStreetscapeSupported: Boolean = false,
     val summary: String = "Checking Hardware Capabilities..."
 )
