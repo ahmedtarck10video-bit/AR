@@ -246,7 +246,7 @@ data class ARDepthMapBuffer(
 
             val uTop = (1f - uClamped) * u00 + uClamped * u10
             val vTop = (1f - uClamped) * v00 + uClamped * v10
-            val uBottom = (1f - uClamped) * u01 + uClamped * u10
+            val uBottom = (1f - uClamped) * u01 + uClamped * u11
             val vBottom = (1f - uClamped) * v01 + uClamped * v11
 
             uImg = (1f - vClamped) * uTop + vClamped * uBottom
