@@ -493,16 +493,32 @@ class Renderer3D {
                 continue
             }
 
-            // Eye depth (z in camera space, negative is forward)
+            // Multi-point fragment depth sampling against ARCore 16-bit physical depth map
+            val u1 = p1x / width
+            val v1 = p1y / height
+            val u2 = p2x / width
+            val v2 = p2y / height
+            val u3 = p3x / width
+            val v3 = p3y / height
+            val uc = (u1 + u2 + u3) * 0.33333334f
+            val vc = (v1 + v2 + v3) * 0.33333334f
+
             val eyeDepthMeters = -vEye1[2]
 
-            // 1. True Per-Pixel / Sampling ARCore 16-Bit Depth Texture Occlusion
+            // 1. Fragment-Level Multi-Sample Physical Depth Occlusion
             if (hasDepthBuffer) {
-                val uCenter = ((ndcX1 + ndcX2 + ndcX3) * 0.33333334f + 1.0f) * 0.5f
-                val vCenter = (1.0f - (ndcY1 + ndcY2 + ndcY3) * 0.33333334f) * 0.5f
-                val realWorldDepth = depthMap!!.getDepthMetersAt(uCenter, vCenter)
-                if (realWorldDepth < 20.0f && eyeDepthMeters > (realWorldDepth + 0.04f)) {
-                    // Physical object in real world is in front of this virtual triangle -> Occluded!
+                val d1 = depthMap!!.getDepthMetersAt(u1, v1)
+                val d2 = depthMap.getDepthMetersAt(u2, v2)
+                val d3 = depthMap.getDepthMetersAt(u3, v3)
+                val dc = depthMap.getDepthMetersAt(uc, vc)
+
+                val occ1 = d1 < 20.0f && eyeDepthMeters > (d1 + 0.03f)
+                val occ2 = d2 < 20.0f && eyeDepthMeters > (d2 + 0.03f)
+                val occ3 = d3 < 20.0f && eyeDepthMeters > (d3 + 0.03f)
+                val occC = dc < 20.0f && eyeDepthMeters > (dc + 0.03f)
+
+                // If completely occluded by physical environment, discard
+                if (occ1 && occ2 && occ3 && occC) {
                     continue
                 }
             }

@@ -212,6 +212,7 @@ data class ARDepthMapBuffer(
     val depthMillimeters: ShortArray = ShortArray(0),
     val timestampNs: Long = 0L,
     val displayRotation: Int = android.view.Surface.ROTATION_0,
+    val viewToImageCorners: FloatArray = floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f),
     val isValid: Boolean = false
 ) {
     /**
@@ -224,7 +225,7 @@ data class ARDepthMapBuffer(
 
     /**
      * Samples the real-world physical depth in meters at normalized View/Screen UV coordinates (0.0 to 1.0),
-     * transforming screen-space UVs to camera image sensor coordinates based on display rotation.
+     * transforming screen-space UVs to camera image sensor coordinates using ARCore's exact 2D coordinate transform matrix.
      * Returns Float.MAX_VALUE if sample is invalid, stale, or out of bounds.
      */
     fun getDepthMetersAt(uView: Float, vView: Float, cameraTimestampNs: Long = 0L): Float {
@@ -234,12 +235,32 @@ data class ARDepthMapBuffer(
         val uClamped = uView.coerceIn(0f, 1f)
         val vClamped = vView.coerceIn(0f, 1f)
 
-        // Transform View/Screen Normalized Coordinates to Camera Sensor Image Normalized Coordinates
-        val (uImg, vImg) = when (displayRotation) {
-            android.view.Surface.ROTATION_90 -> Pair(uClamped, vClamped)
-            android.view.Surface.ROTATION_270 -> Pair(1.0f - uClamped, 1.0f - vClamped)
-            android.view.Surface.ROTATION_180 -> Pair(1.0f - vClamped, uClamped)
-            else /* ROTATION_0 (Portrait) */ -> Pair(vClamped, 1.0f - uClamped)
+        // Exact Bilinear Interpolation through ARCore transformed corners
+        val uImg: Float
+        val vImg: Float
+        if (viewToImageCorners.size >= 8) {
+            val u00 = viewToImageCorners[0]; val v00 = viewToImageCorners[1]
+            val u10 = viewToImageCorners[2]; val v10 = viewToImageCorners[3]
+            val u01 = viewToImageCorners[4]; val v01 = viewToImageCorners[5]
+            val u11 = viewToImageCorners[6]; val v11 = viewToImageCorners[7]
+
+            val uTop = (1f - uClamped) * u00 + uClamped * u10
+            val vTop = (1f - uClamped) * v00 + uClamped * v10
+            val uBottom = (1f - uClamped) * u01 + uClamped * u10
+            val vBottom = (1f - uClamped) * v01 + uClamped * v11
+
+            uImg = (1f - vClamped) * uTop + vClamped * uBottom
+            vImg = (1f - vClamped) * vTop + vClamped * vBottom
+        } else {
+            // Fallback orientation switch
+            val fallback = when (displayRotation) {
+                android.view.Surface.ROTATION_90 -> Pair(uClamped, vClamped)
+                android.view.Surface.ROTATION_270 -> Pair(1.0f - uClamped, 1.0f - vClamped)
+                android.view.Surface.ROTATION_180 -> Pair(1.0f - vClamped, uClamped)
+                else -> Pair(vClamped, 1.0f - uClamped)
+            }
+            uImg = fallback.first
+            vImg = fallback.second
         }
 
         val x = (uImg.coerceIn(0f, 1f) * (width - 1)).toInt()
@@ -258,7 +279,7 @@ data class ARDepthMapBuffer(
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
         other as ARDepthMapBuffer
-        return width == other.width && height == other.height && timestampNs == other.timestampNs && displayRotation == other.displayRotation && isValid == other.isValid
+        return width == other.width && height == other.height && timestampNs == other.timestampNs && displayRotation == other.displayRotation && isValid == other.isValid && viewToImageCorners.contentEquals(other.viewToImageCorners)
     }
 
     override fun hashCode(): Int {
@@ -266,6 +287,7 @@ data class ARDepthMapBuffer(
         result = 31 * result + height
         result = 31 * result + timestampNs.hashCode()
         result = 31 * result + displayRotation
+        result = 31 * result + viewToImageCorners.contentHashCode()
         result = 31 * result + isValid.hashCode()
         return result
     }

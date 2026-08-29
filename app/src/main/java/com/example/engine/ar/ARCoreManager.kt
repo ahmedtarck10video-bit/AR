@@ -1205,12 +1205,32 @@ class ARCoreManager(private val context: Context) {
                         }
                     }
 
+                    // Compute exact 2D coordinate transformation from Normalized Screen/View to Image Coordinates
+                    val viewCorners = floatArrayOf(
+                        0f, 0f, // Top-Left
+                        1f, 0f, // Top-Right
+                        0f, 1f, // Bottom-Left
+                        1f, 1f  // Bottom-Right
+                    )
+                    val imgCorners = FloatArray(8)
+                    try {
+                        frame.transformCoordinates2d(
+                            Coordinates2d.VIEW_NORMALIZED,
+                            viewCorners,
+                            Coordinates2d.IMAGE_NORMALIZED,
+                            imgCorners
+                        )
+                    } catch (e: Exception) {
+                        System.arraycopy(viewCorners, 0, imgCorners, 0, 8)
+                    }
+
                     _depthMapBuffer.value = ARDepthMapBuffer(
                         width = targetW,
                         height = targetH,
                         depthMillimeters = depthGrid,
                         timestampNs = frame.timestamp,
                         displayRotation = currentDisplayRotation,
+                        viewToImageCorners = imgCorners,
                         isValid = true
                     )
 
