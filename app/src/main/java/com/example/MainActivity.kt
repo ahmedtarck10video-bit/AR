@@ -547,7 +547,7 @@ fun AppleLiquidSegmentedPill(
     onModeSelected: (SpatialMode) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val modes = listOf(SpatialMode.OBJECT, SpatialMode.AR, SpatialMode.MR)
+    val modes = listOf(SpatialMode.MR, SpatialMode.AR, SpatialMode.OBJECT)
 
     Box(
         modifier = modifier
