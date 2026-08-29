@@ -497,6 +497,7 @@ class ARCoreManager(private val context: Context) {
     }
 
     fun pause() {
+        currentFrame = null
         try {
             session?.pause()
         } catch (e: Exception) {
@@ -506,6 +507,7 @@ class ARCoreManager(private val context: Context) {
     }
 
     fun destroy() {
+        currentFrame = null
         pause()
         clearAllAnchors()
         try {
@@ -521,6 +523,10 @@ class ARCoreManager(private val context: Context) {
     // FRAME PROCESSING & REAL-TIME FEATURE EXTRACTION
     // =========================================================================
 
+    // @Volatile reference to latest valid frame from the central update loop
+    @Volatile
+    private var currentFrame: Frame? = null
+
     fun updateFrame(pitch: Float, roll: Float, yaw: Float) {
         fallbackTimeSec += 0.033f
 
@@ -529,11 +535,13 @@ class ARCoreManager(private val context: Context) {
             try {
                 val frame = currentSession.update()
                 if (frame != null) {
+                    currentFrame = frame
                     processARCoreFrame(frame)
                     return
                 }
             } catch (e: CameraNotAvailableException) {
                 Log.w(TAG, "Camera not available during frame update", e)
+                currentFrame = null
                 _trackingQuality.value = ARTrackingStateQuality.PAUSED_OR_LOST
                 _trackingStatus.value = "Camera frame unavailable"
             } catch (e: NotYetAvailableException) {
@@ -543,6 +551,7 @@ class ARCoreManager(private val context: Context) {
                 _trackingQuality.value = ARTrackingStateQuality.INSUFFICIENT_FEATURES
             }
         } else {
+            currentFrame = null
             // When ARCore session is not running or unavailable, accurately reflect state
             if (!isARCoreAvailable) {
                 _trackingStatus.value = "ARCore Unavailable"
@@ -1019,14 +1028,13 @@ class ARCoreManager(private val context: Context) {
 
     fun hitTest(screenNormX: Float, screenNormY: Float, viewWidth: Int, viewHeight: Int): HitResultData? {
         val currentSession = session
+        val frame = currentFrame
 
-        // 1. Primary ARCore Raycast on physical planes, depth, and instant placement
-        if (currentSession != null && isSessionRunning) {
+        // 1. Primary ARCore Raycast on physical planes, depth, and instant placement using current frame
+        if (currentSession != null && isSessionRunning && frame != null) {
             try {
-                val frame = currentSession.update()
-                if (frame != null) {
-                    val hitList = frame.hitTest(screenNormX * viewWidth, screenNormY * viewHeight)
-                    for (hit in hitList) {
+                val hitList = frame.hitTest(screenNormX * viewWidth, screenNormY * viewHeight)
+                for (hit in hitList) {
                         val trackable = hit.trackable
                         if (trackable is Plane && trackable.isPoseInPolygon(hit.hitPose) && trackable.trackingState == TrackingState.TRACKING) {
                             val pose = hit.hitPose
@@ -1130,7 +1138,6 @@ class ARCoreManager(private val context: Context) {
                             )
                         }
                     }
-                }
             } catch (e: Exception) {
                 Log.w(TAG, "ARCore hitTest failed", e)
             }

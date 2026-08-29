@@ -44,7 +44,9 @@ import com.example.ui.components.CameraPreview
 import com.example.ui.components.Sceneview3DViewport
 import com.example.ui.components.SceneviewARViewport
 import com.example.ui.components.StereoDualCameraPreview
+import com.example.ui.theme.GlowGreen
 import com.example.ui.theme.MixedRealityTheme
+import com.example.ui.theme.NeonCyan
 import com.example.viewmodel.MRUiState
 import com.example.viewmodel.MixedRealityViewModel
 import com.example.viewmodel.SpatialMode
@@ -294,22 +296,39 @@ fun SpatialMainScreen(
 
             SpatialMode.MR -> {
                 // =============================================================
-                // MR (MIXED REALITY) STEREO DUAL CAMERA
-                // Dual-eye passthrough with synchronized left and right feeds
+                // MR (MIXED REALITY) PASSTHROUGH & SPATIAL OCCLUSION
+                // Unified ARCore Camera Passthrough + Surface Anchoring + Filament
                 // =============================================================
-                val gyroPitch = if (uiState.isGyroEnabled) -uiState.sensorOrientation.pitch else 0f
-                val gyroRoll = if (uiState.isGyroEnabled) uiState.sensorOrientation.roll else 0f
-                val gyroYaw = if (uiState.isGyroEnabled) uiState.sensorOrientation.yaw else 0f
-
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Color.Black)
                 ) {
                     if (hasCameraPermission) {
-                        StereoDualCameraPreview(
+                        SceneviewARViewport(
+                            model = currentModel,
+                            rotX = uiState.rotX,
+                            rotY = uiState.rotY,
+                            rotZ = uiState.rotZ,
+                            scale = uiState.scale,
+                            panX = uiState.panX,
+                            panY = uiState.panY,
+                            surfaceAnchor = uiState.surfaceAnchor,
+                            isAnchored = uiState.arAnchorPlaced,
                             modifier = Modifier
                                 .fillMaxSize()
+                                .pointerInput(Unit) {
+                                    detectTapGestures(
+                                        onTap = { offset ->
+                                            val normX = offset.x / size.width.toFloat()
+                                            val normY = offset.y / size.height.toFloat()
+                                            viewModel.onSurfaceTapped(normX, normY)
+                                        },
+                                        onDoubleTap = {
+                                            viewModel.resetPosition()
+                                        }
+                                    )
+                                }
                                 .pointerInput(Unit) {
                                     detectTransformGestures { _, pan, zoom, rotation ->
                                         if (pan.x != 0f || pan.y != 0f) {
@@ -319,53 +338,80 @@ fun SpatialMainScreen(
                                             viewModel.updateScale(zoom)
                                         }
                                         if (rotation != 0f) {
-                                            viewModel.updateRotation(0f, rotation * 0.02f)
+                                            viewModel.updateRotation(deltaX = 0f, deltaY = rotation * 0.02f)
                                         }
                                     }
-                                },
-                            leftOverlay = {
-                                if (currentModel != null) {
-                                    Sceneview3DViewport(
-                                        model = currentModel,
-                                        rotX = uiState.rotX + gyroPitch,
-                                        rotY = uiState.rotY + gyroRoll - (uiState.ipdDistance * 0.35f),
-                                        rotZ = gyroYaw * 0.4f,
-                                        scale = uiState.scale * 0.85f,
-                                        panX = uiState.panX - 25f,
-                                        panY = uiState.panY - (gyroPitch * 150f),
-                                        isTransparent = true,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
                                 }
-                            },
-                            rightOverlay = {
-                                if (currentModel != null) {
-                                    Sceneview3DViewport(
-                                        model = currentModel,
-                                        rotX = uiState.rotX + gyroPitch,
-                                        rotY = uiState.rotY + gyroRoll + (uiState.ipdDistance * 0.35f),
-                                        rotZ = gyroYaw * 0.4f,
-                                        scale = uiState.scale * 0.85f,
-                                        panX = uiState.panX + 25f,
-                                        panY = uiState.panY - (gyroPitch * 150f),
-                                        isTransparent = true,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                }
-                            }
                         )
+
+                        // MR Mode Spatial Overlay Banner
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 90.dp, start = 16.dp, end = 16.dp),
+                            contentAlignment = Alignment.TopCenter
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .background(
+                                        Color(0xCC0D1B2A),
+                                        shape = RoundedCornerShape(20.dp)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        NeonCyan.copy(alpha = 0.6f),
+                                        shape = RoundedCornerShape(20.dp)
+                                    )
+                                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .background(
+                                            if (uiState.arAnchorPlaced) GlowGreen else NeonCyan,
+                                            shape = CircleShape
+                                        )
+                                )
+                                Text(
+                                    text = if (uiState.arAnchorPlaced) "MR: 6DoF Passthrough Active (Anchored)" else "MR: Tap Detected Surface to Anchor",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
                     } else {
                         // Camera Permission Request
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            Button(
-                                onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                                shape = RoundedCornerShape(20.dp)
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier.padding(32.dp)
                             ) {
-                                Text("Enable Camera for MR", color = Color.Black, fontWeight = FontWeight.Bold)
+                                Icon(
+                                    Icons.Default.CameraAlt,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(54.dp)
+                                )
+                                Text(
+                                    text = "Camera Access Required for Mixed Reality",
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Button(
+                                    onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                                    shape = RoundedCornerShape(20.dp)
+                                ) {
+                                    Text("Grant Access", color = Color.Black, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
