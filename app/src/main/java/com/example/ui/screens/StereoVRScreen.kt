@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -61,10 +62,10 @@ fun StereoVRScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(Color.Transparent)
     ) {
         if (hasCameraPermission) {
-            // Live Hardware-Accelerated Stereoscopic Mixed Reality AR Viewport
+            // Live Unified Hardware-Accelerated Stereoscopic Mixed Reality AR Viewport
             StereoARViewport(
                 model = currentModel,
                 rotX = uiState.rotX + headPitch,
@@ -139,6 +140,41 @@ fun StereoVRScreen(
             }
         }
 
+        // Top Status Pill with Real-Time Optics Telemetry
+        GlassCard(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 16.dp),
+            shape = RoundedCornerShape(20.dp),
+            backgroundColor = Color(0x600F172A),
+            borderColor = Color(0x3300E5FF)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = if (uiState.arAnchorPlaced) "6DoF ANCHORED" else "SCANNING PHYSICAL SURFACE",
+                    color = if (uiState.arAnchorPlaced) NeonCyan else Color.Yellow,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    text = "•",
+                    color = Color.White.copy(alpha = 0.5f),
+                    fontSize = 11.sp
+                )
+                Text(
+                    text = "Convergence: ${String.format("%.2fm", uiState.stereoEyeState.convergenceDistanceMeters)}",
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        }
+
         // Floating Liquid Glass Control Bar at bottom
         GlassCard(
             modifier = Modifier
@@ -152,8 +188,8 @@ fun StereoVRScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -161,8 +197,8 @@ fun StereoVRScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "MR Stereo IPD: ${(uiState.ipdDistance * 100).toInt()} mm",
-                        style = MaterialTheme.typography.labelSmall.copy(color = Color.White, fontWeight = FontWeight.SemiBold)
+                        text = "MR Stereo IPD: ${(uiState.ipdDistance * 1000).toInt()} mm | Vergence: ${String.format("%.1f°", uiState.stereoEyeState.vergenceDegrees)}",
+                        style = MaterialTheme.typography.labelSmall.copy(color = Color.White, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
                     )
                     Row {
                         IconButton(onClick = { viewModel.toggleWireframe() }) {
@@ -176,7 +212,7 @@ fun StereoVRScreen(
                 Slider(
                     value = uiState.ipdDistance,
                     onValueChange = { viewModel.setIpdDistance(it) },
-                    valueRange = 0.05f..0.25f,
+                    valueRange = 0.045f..0.085f,
                     colors = SliderDefaults.colors(
                         thumbColor = NeonCyan,
                         activeTrackColor = NeonCyan,
@@ -187,4 +223,3 @@ fun StereoVRScreen(
         }
     }
 }
-

@@ -13,6 +13,7 @@ import android.location.LocationManager
 import android.media.Image
 import android.os.Bundle
 import android.util.Log
+import android.opengl.Matrix
 import androidx.core.content.ContextCompat
 import com.example.math3d.Vec3
 import com.google.ar.core.*
@@ -127,8 +128,13 @@ class ARCoreManager(private val context: Context) {
     private val _recordedSessions = MutableStateFlow<List<RecordedSessionItem>>(emptyList())
     val recordedSessions: StateFlow<List<RecordedSessionItem>> = _recordedSessions.asStateFlow()
 
+    private var configuredIpdMeters: Float = 0.064f
     private var fallbackTimeSec = 0f
     private var isFaceTrackingMode: Boolean = false
+
+    fun setIpdDistance(ipd: Float) {
+        configuredIpdMeters = ipd.coerceIn(0.040f, 0.090f)
+    }
 
     // GPS Location listener for Geospatial initialization (updates raw GPS only; VPS status is derived from ARCore Earth)
     private var locationManager: LocationManager? = null
@@ -893,24 +899,83 @@ class ARCoreManager(private val context: Context) {
             val pPoint = intrinsics.principalPoint
             val dims = intrinsics.imageDimensions
             val camPose = camera.pose
-            val ipd = 0.064f // Default 64mm IPD
+            val ipd = configuredIpdMeters.coerceIn(0.040f, 0.090f)
             val halfIpd = ipd * 0.5f
-            val vergence = kotlin.math.atan2(halfIpd, 1.5f) * 180f / Math.PI.toFloat()
+
+            // Dynamic convergence distance tied to actual physical 6DoF Anchor position
+            val activeAnchor = activeAnchors.firstOrNull { it.trackingState == TrackingState.TRACKING }
+            val convergenceDist: Float = if (activeAnchor != null) {
+                val anchorPose = activeAnchor.pose
+                val dx = anchorPose.tx() - camPose.tx()
+                val dy = anchorPose.ty() - camPose.ty()
+                val dz = anchorPose.tz() - camPose.tz()
+                val dist = sqrt((dx * dx + dy * dy + dz * dz).toDouble()).toFloat()
+                if (dist > 0.2f) dist else 1.5f
+            } else {
+                1.5f
+            }
+
+            val vergenceRad = atan2(halfIpd.toDouble(), convergenceDist.toDouble())
+            val vergence: Float = (vergenceRad * 180.0 / Math.PI).toFloat()
+
+            // True Left/Right Eye World Poses
+            val leftEyePose = camPose.compose(Pose.makeTranslation(-halfIpd, 0f, 0f))
+            val rightEyePose = camPose.compose(Pose.makeTranslation(+halfIpd, 0f, 0f))
+
+            // Compute 4x4 View Matrices
+            val leftEyeTransform = FloatArray(16)
+            val rightEyeTransform = FloatArray(16)
+            val leftViewM = FloatArray(16)
+            val rightViewM = FloatArray(16)
+            leftEyePose.toMatrix(leftEyeTransform, 0)
+            rightEyePose.toMatrix(rightEyeTransform, 0)
+            Matrix.invertM(leftViewM, 0, leftEyeTransform, 0)
+            Matrix.invertM(rightViewM, 0, rightEyeTransform, 0)
+
+            // Compute 4x4 Asymmetric Stereoscopic Off-Axis Projection Matrices from Intrinsics
+            val fx: Float = if (fLength.isNotEmpty()) fLength[0] else 500f
+            val fy: Float = if (fLength.size > 1) fLength[1] else 500f
+            val cx: Float = if (pPoint.isNotEmpty()) pPoint[0] else (dims.getOrElse(0) { 1920 } / 2f)
+            val cy: Float = if (pPoint.size > 1) pPoint[1] else (dims.getOrElse(1) { 1080 } / 2f)
+            val w: Float = if (dims.isNotEmpty()) dims[0].toFloat() else 1920f
+            val h: Float = if (dims.size > 1) dims[1].toFloat() else 1080f
+
+            val near = 0.1f
+            val far = 100.0f
+            val wNear: Float = near * (w / (2f * fx))
+            val hNear: Float = near * (h / (2f * fy))
+            val stereoShift: Float = (halfIpd * near) / convergenceDist
+
+            val leftProjM = FloatArray(16)
+            val rightProjM = FloatArray(16)
+            Matrix.frustumM(leftProjM, 0, -wNear + stereoShift, wNear + stereoShift, -hNear, hNear, near, far)
+            Matrix.frustumM(rightProjM, 0, -wNear - stereoShift, wNear - stereoShift, -hNear, hNear, near, far)
 
             _stereoEyeState.value = ARStereoEyeState(
                 isStereoReady = (camera.trackingState == TrackingState.TRACKING),
-                focalLengthX = if (fLength.isNotEmpty()) fLength[0] else 500f,
-                focalLengthY = if (fLength.size > 1) fLength[1] else 500f,
-                principalPointX = if (pPoint.isNotEmpty()) pPoint[0] else (dims[0] / 2f),
-                principalPointY = if (pPoint.size > 1) pPoint[1] else (dims[1] / 2f),
-                imageWidth = if (dims.isNotEmpty()) dims[0] else 1920,
-                imageHeight = if (dims.size > 1) dims[1] else 1080,
+                focalLengthX = fx,
+                focalLengthY = fy,
+                principalPointX = cx,
+                principalPointY = cy,
+                imageWidth = dims.getOrElse(0) { 1920 },
+                imageHeight = dims.getOrElse(1) { 1080 },
                 ipdMeters = ipd,
+                eyeSeparationMeters = ipd, // Full physical baseline separation
+                convergenceDistanceMeters = convergenceDist,
                 vergenceDegrees = vergence,
-                eyeSeparationMeters = halfIpd,
                 cameraPoseTx = camPose.tx(),
                 cameraPoseTy = camPose.ty(),
-                cameraPoseTz = camPose.tz()
+                cameraPoseTz = camPose.tz(),
+                leftEyePoseTx = leftEyePose.tx(),
+                leftEyePoseTy = leftEyePose.ty(),
+                leftEyePoseTz = leftEyePose.tz(),
+                rightEyePoseTx = rightEyePose.tx(),
+                rightEyePoseTy = rightEyePose.ty(),
+                rightEyePoseTz = rightEyePose.tz(),
+                leftViewMatrix = leftViewM,
+                rightViewMatrix = rightViewM,
+                leftProjectionMatrix = leftProjM,
+                rightProjectionMatrix = rightProjM
             )
         } catch (e: Exception) {
             Log.w(TAG, "Error querying camera intrinsics for stereo", e)

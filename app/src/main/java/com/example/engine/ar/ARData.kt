@@ -215,9 +215,47 @@ data class ARStereoEyeState(
     val imageWidth: Int = 0,
     val imageHeight: Int = 0,
     val ipdMeters: Float = 0.064f,
+    val eyeSeparationMeters: Float = 0.064f, // Full physical inter-pupillary baseline distance
+    val convergenceDistanceMeters: Float = 1.5f,
     val vergenceDegrees: Float = 0f,
-    val eyeSeparationMeters: Float = 0.032f,
     val cameraPoseTx: Float = 0f,
     val cameraPoseTy: Float = 0f,
-    val cameraPoseTz: Float = 0f
-)
+    val cameraPoseTz: Float = 0f,
+    val leftEyePoseTx: Float = 0f,
+    val leftEyePoseTy: Float = 0f,
+    val leftEyePoseTz: Float = 0f,
+    val rightEyePoseTx: Float = 0f,
+    val rightEyePoseTy: Float = 0f,
+    val rightEyePoseTz: Float = 0f,
+    val leftViewMatrix: FloatArray = FloatArray(16),
+    val rightViewMatrix: FloatArray = FloatArray(16),
+    val leftProjectionMatrix: FloatArray = FloatArray(16),
+    val rightProjectionMatrix: FloatArray = FloatArray(16)
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as ARStereoEyeState
+        return isStereoReady == other.isStereoReady &&
+                focalLengthX == other.focalLengthX &&
+                focalLengthY == other.focalLengthY &&
+                ipdMeters == other.ipdMeters &&
+                eyeSeparationMeters == other.eyeSeparationMeters &&
+                convergenceDistanceMeters == other.convergenceDistanceMeters &&
+                vergenceDegrees == other.vergenceDegrees &&
+                cameraPoseTx == other.cameraPoseTx &&
+                cameraPoseTy == other.cameraPoseTy &&
+                cameraPoseTz == other.cameraPoseTz
+    }
+
+    override fun hashCode(): Int {
+        var result = isStereoReady.hashCode()
+        result = 31 * result + focalLengthX.hashCode()
+        result = 31 * result + focalLengthY.hashCode()
+        result = 31 * result + ipdMeters.hashCode()
+        result = 31 * result + eyeSeparationMeters.hashCode()
+        result = 31 * result + convergenceDistanceMeters.hashCode()
+        result = 31 * result + vergenceDegrees.hashCode()
+        return result
+    }
+}

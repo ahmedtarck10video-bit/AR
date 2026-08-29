@@ -448,6 +448,7 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
 
     fun setIpdDistance(ipd: Float) {
         _uiState.value = _uiState.value.copy(ipdDistance = ipd)
+        arCoreManager.setIpdDistance(ipd)
     }
 
     fun resetView() {
