@@ -940,16 +940,24 @@ class ARCoreManager(private val context: Context) {
             val w: Float = if (dims.isNotEmpty()) dims[0].toFloat() else 1920f
             val h: Float = if (dims.size > 1) dims[1].toFloat() else 1080f
 
+            // 1. Obtain Official ARCore Display-Oriented Projection Matrix (handles all aspect ratios & screen rotations)
+            val arcoreBaseProj = FloatArray(16)
             val near = 0.1f
             val far = 100.0f
-            val wNear: Float = near * (w / (2f * fx))
-            val hNear: Float = near * (h / (2f * fy))
-            val stereoShift: Float = (halfIpd * near) / convergenceDist
+            camera.getProjectionMatrix(arcoreBaseProj, 0, near, far)
 
-            val leftProjM = FloatArray(16)
-            val rightProjM = FloatArray(16)
-            Matrix.frustumM(leftProjM, 0, -wNear + stereoShift, wNear + stereoShift, -hNear, hNear, near, far)
-            Matrix.frustumM(rightProjM, 0, -wNear - stereoShift, wNear - stereoShift, -hNear, hNear, near, far)
+            // 2. Derive Rigorous Off-Axis Asymmetric Stereo Projection for Left and Right Eyes
+            // Shear factor based on IPD half-separation and convergence distance
+            val stereoShear = (halfIpd) / convergenceDist
+
+            val leftProjM = arcoreBaseProj.clone().apply {
+                // Apply horizontal optical shear directly to element [8] (P[0][2] in OpenGL 4x4 column-major)
+                this[8] += stereoShear
+            }
+            val rightProjM = arcoreBaseProj.clone().apply {
+                // Apply horizontal optical shear in opposite direction for right ocular convergence
+                this[8] -= stereoShear
+            }
 
             _stereoEyeState.value = ARStereoEyeState(
                 isStereoReady = (camera.trackingState == TrackingState.TRACKING),
