@@ -58,6 +58,13 @@ fun StereoVRScreen(
 
     val headPitch = uiState.sensorOrientation.pitch * 0.02f
     val headRoll = uiState.sensorOrientation.roll * 0.02f
+    val headYaw = uiState.sensorOrientation.yaw * 0.02f
+
+    // True Optical Stereoscopic Vergence angle calculation (based on 1.5m focal plane)
+    val focalDistanceMeters = 1.5f
+    val halfIpd = uiState.ipdDistance * 0.5f
+    val vergenceDeg = kotlin.math.atan2(halfIpd, focalDistanceMeters) * 180f / Math.PI.toFloat()
+    val eyeParallaxPixels = uiState.ipdDistance * 320f
 
     Box(
         modifier = modifier
@@ -86,11 +93,12 @@ fun StereoVRScreen(
                     Sceneview3DViewport(
                         model = currentModel,
                         rotX = uiState.rotX + headPitch,
-                        rotY = uiState.rotY + headRoll - (uiState.ipdDistance * 0.4f),
-                        rotZ = 0f,
+                        rotY = uiState.rotY + headRoll + vergenceDeg,
+                        rotZ = headYaw,
                         scale = uiState.scale * 0.85f,
-                        panX = uiState.panX - 20f,
+                        panX = uiState.panX - eyeParallaxPixels,
                         panY = uiState.panY,
+                        isTransparent = true,
                         modifier = Modifier.fillMaxSize()
                     )
                     Text(
@@ -105,11 +113,12 @@ fun StereoVRScreen(
                     Sceneview3DViewport(
                         model = currentModel,
                         rotX = uiState.rotX + headPitch,
-                        rotY = uiState.rotY + headRoll + (uiState.ipdDistance * 0.4f),
-                        rotZ = 0f,
+                        rotY = uiState.rotY + headRoll - vergenceDeg,
+                        rotZ = headYaw,
                         scale = uiState.scale * 0.85f,
-                        panX = uiState.panX + 20f,
+                        panX = uiState.panX + eyeParallaxPixels,
                         panY = uiState.panY,
+                        isTransparent = true,
                         modifier = Modifier.fillMaxSize()
                     )
                     Text(

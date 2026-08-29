@@ -547,7 +547,7 @@ fun AppleLiquidSegmentedPill(
     onModeSelected: (SpatialMode) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val modes = listOf(SpatialMode.MR, SpatialMode.AR, SpatialMode.OBJECT)
+    val modes = listOf(SpatialMode.OBJECT, SpatialMode.AR, SpatialMode.MR)
 
     Box(
         modifier = modifier
@@ -570,6 +570,11 @@ fun AppleLiquidSegmentedPill(
             modes.forEach { mode ->
                 val isSelected = currentMode == mode
                 val interactionSource = remember { MutableInteractionSource() }
+                val labelText = when (mode) {
+                    SpatialMode.OBJECT -> "Object"
+                    SpatialMode.AR -> "AR"
+                    SpatialMode.MR -> "MR"
+                }
 
                 Box(
                     modifier = Modifier
@@ -589,7 +594,7 @@ fun AppleLiquidSegmentedPill(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = mode.label,
+                        text = labelText,
                         color = if (isSelected) Color(0xFF1E242B) else Color(0xFF5F6670),
                         fontSize = 15.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium

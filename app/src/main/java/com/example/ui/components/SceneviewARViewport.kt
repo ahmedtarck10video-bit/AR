@@ -25,6 +25,7 @@ import com.example.math3d.Model3D
 import com.example.ui.theme.GlowGreen
 import com.example.ui.theme.NeonCyan
 import com.google.ar.core.ArCoreApk
+import com.google.ar.core.Config
 import io.github.sceneview.SceneView
 import io.github.sceneview.ar.ARSceneView
 import io.github.sceneview.math.Position
@@ -102,6 +103,18 @@ fun SceneviewARViewport(
                     ARSceneView(ctx).apply {
                         planeRenderer.isVisible = true
                         planeRenderer.isEnabled = true
+                        cameraStream?.isDepthOcclusionEnabled = true
+                        sessionConfiguration = { session, config ->
+                            config.depthMode = if (session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                                Config.DepthMode.AUTOMATIC
+                            } else {
+                                Config.DepthMode.DISABLED
+                            }
+                            config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
+                            config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
+                            config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
+                            config.focusMode = Config.FocusMode.AUTO
+                        }
                         arSceneViewRef = this
                     }
                 },
