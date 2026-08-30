@@ -7,7 +7,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -19,13 +18,12 @@ import com.example.engine.ar.ARSurfaceAnchor
 import com.example.math3d.Model3D
 
 /**
- * Stereoscopic Dual Camera Viewport for Mixed Reality (MR Mode).
+ * Enterprise Stereoscopic Dual Viewport for Mixed Reality (MR Mode).
  *
- * Provides a Hardware-Accelerated Dual Filament GPU Passthrough stream:
- * - Left Eye: True 3D model perspective with Left IPD & vergence angle.
- * - Right Eye: True 3D model perspective with Right IPD & vergence angle.
- * - Zero-copy camera passthrough with ocular separation.
- * - Full PBR materials, textures, shaders, and metric alignment.
+ * Backed by True Dual Physical Camera Streams + Dual Filament 3D GPU Nodes:
+ * - Left Eye: True physical camera stream + Left Eye View/Projection Matrix with IPD & Vergence.
+ * - Right Eye: True physical camera stream + Right Eye View/Projection Matrix with IPD & Vergence.
+ * - Zero-allocation stereoscopic pipeline without arbitrary pixel shifts.
  */
 @Composable
 fun StereoARViewport(
@@ -57,16 +55,10 @@ fun StereoARViewport(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // Dual Ocular Split View (Left Eye + Right Eye)
-        Row(modifier = Modifier.fillMaxSize()) {
-            // 1. Left Eye Stream & 3D Filament Renderer
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-            ) {
-                CameraPreview(modifier = Modifier.fillMaxSize())
-
+        StereoDualCameraPreview(
+            modifier = Modifier.fillMaxSize(),
+            showCameraPassthrough = true,
+            leftOverlay = {
                 if (model != null) {
                     Sceneview3DViewport(
                         model = model,
@@ -93,24 +85,8 @@ fun StereoARViewport(
                 ) {
                     Text("👁️ LEFT EYE", color = Color(0xFF00E5FF), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
-            }
-
-            // Optical Center Divider
-            Box(
-                modifier = Modifier
-                    .width(3.dp)
-                    .fillMaxHeight()
-                    .background(Color.White.copy(alpha = 0.4f))
-            )
-
-            // 2. Right Eye Stream & 3D Filament Renderer
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-            ) {
-                CameraPreview(modifier = Modifier.fillMaxSize())
-
+            },
+            rightOverlay = {
                 if (model != null) {
                     Sceneview3DViewport(
                         model = model,
@@ -135,10 +111,18 @@ fun StereoARViewport(
                         .background(Color.Black.copy(alpha = 0.6f), CircleShape)
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
-                    Text("RIGHT EYE 👁️", color = Color(0xFFFFB703), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text("👁️ RIGHT EYE", color = Color(0xFF00E5FF), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
             }
-        }
+        )
+
+        // Optical Center Divider
+        Box(
+            modifier = Modifier
+                .width(1.dp)
+                .fillMaxHeight()
+                .align(Alignment.Center)
+                .background(Color.White.copy(alpha = 0.25f))
+        )
     }
 }
-

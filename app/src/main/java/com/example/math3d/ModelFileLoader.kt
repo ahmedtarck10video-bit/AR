@@ -1896,7 +1896,7 @@ object ModelFileLoader {
     }
 
     // =========================================================================
-    // 5. PLY Parser (ASCII & Dynamic Property Layout)
+    // 5. PLY Parser (ASCII & Binary Little/Big Endian)
     // =========================================================================
     private fun parsePly(reader: BufferedReader): List<Triangle> {
         val triangles = ArrayList<Triangle>()
@@ -1904,7 +1904,9 @@ object ModelFileLoader {
             var vertexCount = 0
             var faceCount = 0
             var isHeader = true
-            val vertexProperties = ArrayList<String>()
+            var isBinary = false
+            var isBigEndian = false
+            val vertexProperties = ArrayList<Pair<String, String>>()
             val vertices = ArrayList<Vec3>()
             val vertexColors = ArrayList<Long>()
 
@@ -1913,7 +1915,13 @@ object ModelFileLoader {
 
             while (line != null && isHeader) {
                 val trimmed = line.trim()
-                if (trimmed.startsWith("element vertex")) {
+                if (trimmed.startsWith("format binary_little_endian")) {
+                    isBinary = true
+                    isBigEndian = false
+                } else if (trimmed.startsWith("format binary_big_endian")) {
+                    isBinary = true
+                    isBigEndian = true
+                } else if (trimmed.startsWith("element vertex")) {
                     vertexCount = trimmed.split("\\s+".toRegex()).getOrNull(2)?.toIntOrNull() ?: 0
                     inVertexProps = true
                 } else if (trimmed.startsWith("element face")) {
@@ -1921,20 +1929,22 @@ object ModelFileLoader {
                     inVertexProps = false
                 } else if (trimmed.startsWith("property ") && inVertexProps) {
                     val parts = trimmed.split("\\s+".toRegex())
+                    val propType = parts.getOrNull(1) ?: "float"
                     val propName = parts.lastOrNull() ?: ""
-                    vertexProperties.add(propName.lowercase())
+                    vertexProperties.add(Pair(propName.lowercase(), propType.lowercase()))
                 } else if (trimmed == "end_header") {
                     isHeader = false
                 }
                 line = reader.readLine()
             }
 
-            val xIdx = vertexProperties.indexOf("x").let { if (it >= 0) it else 0 }
-            val yIdx = vertexProperties.indexOf("y").let { if (it >= 0) it else 1 }
-            val zIdx = vertexProperties.indexOf("z").let { if (it >= 0) it else 2 }
-            val rIdx = vertexProperties.indexOf("red").let { if (it >= 0) it else vertexProperties.indexOf("r") }
-            val gIdx = vertexProperties.indexOf("green").let { if (it >= 0) it else vertexProperties.indexOf("g") }
-            val bIdx = vertexProperties.indexOf("blue").let { if (it >= 0) it else vertexProperties.indexOf("b") }
+            val propNames = vertexProperties.map { it.first }
+            val xIdx = propNames.indexOf("x").let { if (it >= 0) it else 0 }
+            val yIdx = propNames.indexOf("y").let { if (it >= 0) it else 1 }
+            val zIdx = propNames.indexOf("z").let { if (it >= 0) it else 2 }
+            val rIdx = propNames.indexOf("red").let { if (it >= 0) it else propNames.indexOf("r") }
+            val gIdx = propNames.indexOf("green").let { if (it >= 0) it else propNames.indexOf("g") }
+            val bIdx = propNames.indexOf("blue").let { if (it >= 0) it else propNames.indexOf("b") }
 
             for (v in 0 until vertexCount) {
                 if (line == null) break
@@ -1985,9 +1995,9 @@ object ModelFileLoader {
     }
 
     // =========================================================================
-    // Normalization & Center Mesh (In-Place Memory Optimized)
+    // Normalization & Center Mesh (In-Place Memory Optimized with 1:1 Metric Preservation)
     // =========================================================================
-    fun normalizeAndCenterMesh(triangles: List<Triangle>): List<Triangle> {
+    fun normalizeAndCenterMesh(triangles: List<Triangle>, preserveMetricScale: Boolean = true): List<Triangle> {
         if (triangles.isEmpty()) return triangles
 
         var minX = Float.MAX_VALUE
@@ -2015,8 +2025,7 @@ object ModelFileLoader {
         val sizeY = maxY - minY
         val sizeZ = maxZ - minZ
         val maxDim = max(sizeX, max(sizeY, sizeZ))
-        val targetSize = 2.2f
-        val scale = if (maxDim > 0.0001f) targetSize / maxDim else 1.0f
+        val scale = if (!preserveMetricScale && maxDim > 0.0001f) 2.2f / maxDim else 1.0f
 
         val result = ArrayList<Triangle>(triangles.size)
         for (t in triangles) {

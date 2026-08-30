@@ -150,31 +150,67 @@ class DualPhysicalCameraManager(private val context: Context) {
      */
     @SuppressLint("MissingPermission")
     fun startDualStreams(leftSurface: Surface, rightSurface: Surface) {
+        if (!leftSurface.isValid || !rightSurface.isValid) {
+            Log.w(TAG, "Cannot start dual streams: one or both surfaces are invalid")
+            return
+        }
+
+        if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "Cannot start camera streams: CAMERA permission not granted")
+            return
+        }
+
         val info = _sessionInfo.value
-        val leftId = info.leftCameraId ?: return
+        val leftId = info.leftCameraId ?: run {
+            try {
+                cameraManager.cameraIdList.firstOrNull()
+            } catch (e: Exception) {
+                null
+            }
+        } ?: return
+
         val rightId = info.rightCameraId ?: leftId
 
         try {
-            // Open Left Camera
-            cameraManager.openCamera(leftId, object : CameraDevice.StateCallback() {
-                override fun onOpened(camera: CameraDevice) {
-                    leftCameraDevice = camera
-                    createCameraSession(camera, leftSurface) { session ->
-                        leftCaptureSession = session
-                    }
-                }
-                override fun onDisconnected(camera: CameraDevice) {
-                    camera.close()
-                    leftCameraDevice = null
-                }
-                override fun onError(camera: CameraDevice, error: Int) {
-                    camera.close()
-                    leftCameraDevice = null
-                }
-            }, mainHandler)
+            stop() // Clean up any existing active sessions before starting
 
-            // If right camera is distinct from left, open right camera device
-            if (rightId != leftId) {
+            // If same camera (single sensor or emulator), stream single device to both surfaces
+            if (leftId == rightId) {
+                cameraManager.openCamera(leftId, object : CameraDevice.StateCallback() {
+                    override fun onOpened(camera: CameraDevice) {
+                        leftCameraDevice = camera
+                        createDualOutputCameraSession(camera, leftSurface, rightSurface) { session ->
+                            leftCaptureSession = session
+                        }
+                    }
+                    override fun onDisconnected(camera: CameraDevice) {
+                        try { camera.close() } catch (e: Exception) {}
+                        leftCameraDevice = null
+                    }
+                    override fun onError(camera: CameraDevice, error: Int) {
+                        try { camera.close() } catch (e: Exception) {}
+                        leftCameraDevice = null
+                    }
+                }, mainHandler)
+            } else {
+                // True Dual Physical Camera Sensors
+                cameraManager.openCamera(leftId, object : CameraDevice.StateCallback() {
+                    override fun onOpened(camera: CameraDevice) {
+                        leftCameraDevice = camera
+                        createCameraSession(camera, leftSurface) { session ->
+                            leftCaptureSession = session
+                        }
+                    }
+                    override fun onDisconnected(camera: CameraDevice) {
+                        try { camera.close() } catch (e: Exception) {}
+                        leftCameraDevice = null
+                    }
+                    override fun onError(camera: CameraDevice, error: Int) {
+                        try { camera.close() } catch (e: Exception) {}
+                        leftCameraDevice = null
+                    }
+                }, mainHandler)
+
                 cameraManager.openCamera(rightId, object : CameraDevice.StateCallback() {
                     override fun onOpened(camera: CameraDevice) {
                         rightCameraDevice = camera
@@ -183,17 +219,45 @@ class DualPhysicalCameraManager(private val context: Context) {
                         }
                     }
                     override fun onDisconnected(camera: CameraDevice) {
-                        camera.close()
+                        try { camera.close() } catch (e: Exception) {}
                         rightCameraDevice = null
                     }
                     override fun onError(camera: CameraDevice, error: Int) {
-                        camera.close()
+                        try { camera.close() } catch (e: Exception) {}
                         rightCameraDevice = null
                     }
                 }, mainHandler)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error opening dual camera streams", e)
+        }
+    }
+
+    private fun createDualOutputCameraSession(camera: CameraDevice, leftSurf: Surface, rightSurf: Surface, onReady: (CameraCaptureSession) -> Unit) {
+        try {
+            val surfaces = if (leftSurf != rightSurf) listOf(leftSurf, rightSurf) else listOf(leftSurf)
+            @Suppress("DEPRECATION")
+            camera.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: CameraCaptureSession) {
+                    try {
+                        val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                            if (leftSurf.isValid) addTarget(leftSurf)
+                            if (rightSurf.isValid && rightSurf != leftSurf) addTarget(rightSurf)
+                            set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                            set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                        }
+                        session.setRepeatingRequest(requestBuilder.build(), null, mainHandler)
+                        onReady(session)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error starting dual-output preview capture request", e)
+                    }
+                }
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    Log.e(TAG, "Camera capture session configuration failed")
+                }
+            }, mainHandler)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error creating dual output capture session", e)
         }
     }
 
