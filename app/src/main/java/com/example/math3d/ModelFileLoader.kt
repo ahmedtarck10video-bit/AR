@@ -915,7 +915,7 @@ object ModelFileLoader {
 
         return when {
             lowerName.endsWith(".obj") -> {
-                parseObjStreaming(BufferedReader(InputStreamReader(stream, Charsets.UTF_8), BUFFER_SIZE))
+                parseObjStreaming(BufferedReader(InputStreamReader(stream, Charsets.UTF_8), BUFFER_SIZE), modelDir)
             }
             lowerName.endsWith(".stl") -> {
                 parseStlStreaming(stream)
@@ -945,7 +945,7 @@ object ModelFileLoader {
                     parseUsdzStreaming(stream)
                 } else {
                     // Try OBJ line-based streaming reader
-                    parseObjStreaming(BufferedReader(InputStreamReader(stream, Charsets.UTF_8), BUFFER_SIZE))
+                    parseObjStreaming(BufferedReader(InputStreamReader(stream, Charsets.UTF_8), BUFFER_SIZE), modelDir)
                 }
             }
         }
@@ -958,14 +958,53 @@ object ModelFileLoader {
     // =========================================================================
     // 1. HIGH-PERFORMANCE STREAMING OBJ PARSER (Handles 250MB+ Wavefront files)
     // =========================================================================
-    private fun parseObjStreaming(reader: BufferedReader): List<Triangle> {
+    private fun parseObjStreaming(reader: BufferedReader, modelDir: java.io.File? = null): List<Triangle> {
         val vertices = ArrayList<Vec3>(50000)
         val normals = ArrayList<Vec3>(50000)
         val uvs = ArrayList<Pair<Float, Float>>(50000)
         val triangles = ArrayList<Triangle>(100000)
 
+        val materialColors = HashMap<String, Long>()
         var defaultColor = 0xFFD6C5ADL // High-fidelity terracotta / marble tone
         var currentMaterialColor = defaultColor
+
+        fun loadMtlFile(mtlFileName: String) {
+            if (modelDir == null) return
+            val cleanName = mtlFileName.trim().replace('\\', '/')
+            var mtlFile = java.io.File(modelDir, cleanName)
+            if (!mtlFile.exists()) {
+                val baseOnly = cleanName.substringAfterLast('/')
+                val altFile = java.io.File(modelDir, baseOnly)
+                if (altFile.exists()) mtlFile = altFile
+            }
+            if (!mtlFile.exists() || !mtlFile.canRead()) return
+
+            try {
+                mtlFile.bufferedReader().useLines { lines ->
+                    var curMat: String? = null
+                    for (line in lines) {
+                        val trimmed = line.trim()
+                        if (trimmed.startsWith("newmtl ")) {
+                            curMat = trimmed.substring(7).trim()
+                        } else if (trimmed.startsWith("Kd ") && curMat != null) {
+                            val parts = trimmed.split("\\s+".toRegex())
+                            if (parts.size >= 4) {
+                                val r = (parts[1].toFloatOrNull() ?: 1f).coerceIn(0f, 1f)
+                                val g = (parts[2].toFloatOrNull() ?: 1f).coerceIn(0f, 1f)
+                                val b = (parts[3].toFloatOrNull() ?: 1f).coerceIn(0f, 1f)
+                                val ri = (r * 255).toInt()
+                                val gi = (g * 255).toInt()
+                                val bi = (b * 255).toInt()
+                                val col = (0xFFL shl 24) or ((ri.toLong() and 0xFF) shl 16) or ((gi.toLong() and 0xFF) shl 8) or (bi.toLong() and 0xFF)
+                                materialColors[curMat] = col
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore MTL load failures gracefully
+            }
+        }
 
         try {
             var line: String? = reader.readLine()
@@ -976,7 +1015,13 @@ object ModelFileLoader {
                     continue
                 }
 
-                if (trimmed.startsWith("v ")) {
+                if (trimmed.startsWith("mtllib ")) {
+                    val mtlFile = trimmed.substring(7).trim()
+                    loadMtlFile(mtlFile)
+                } else if (trimmed.startsWith("usemtl ")) {
+                    val matName = trimmed.substring(7).trim()
+                    currentMaterialColor = materialColors[matName] ?: defaultColor
+                } else if (trimmed.startsWith("v ")) {
                     // Vertex: v x y z
                     val parts = trimmed.split("\\s+".toRegex())
                     if (parts.size >= 4) {
@@ -1851,7 +1896,7 @@ object ModelFileLoader {
     }
 
     // =========================================================================
-    // 5. PLY Parser
+    // 5. PLY Parser (ASCII & Dynamic Property Layout)
     // =========================================================================
     private fun parsePly(reader: BufferedReader): List<Triangle> {
         val triangles = ArrayList<Triangle>()
@@ -1859,39 +1904,55 @@ object ModelFileLoader {
             var vertexCount = 0
             var faceCount = 0
             var isHeader = true
+            val vertexProperties = ArrayList<String>()
             val vertices = ArrayList<Vec3>()
             val vertexColors = ArrayList<Long>()
 
             var line = reader.readLine()
+            var inVertexProps = false
+
             while (line != null && isHeader) {
                 val trimmed = line.trim()
                 if (trimmed.startsWith("element vertex")) {
                     vertexCount = trimmed.split("\\s+".toRegex()).getOrNull(2)?.toIntOrNull() ?: 0
+                    inVertexProps = true
                 } else if (trimmed.startsWith("element face")) {
                     faceCount = trimmed.split("\\s+".toRegex()).getOrNull(2)?.toIntOrNull() ?: 0
+                    inVertexProps = false
+                } else if (trimmed.startsWith("property ") && inVertexProps) {
+                    val parts = trimmed.split("\\s+".toRegex())
+                    val propName = parts.lastOrNull() ?: ""
+                    vertexProperties.add(propName.lowercase())
                 } else if (trimmed == "end_header") {
                     isHeader = false
                 }
                 line = reader.readLine()
             }
 
+            val xIdx = vertexProperties.indexOf("x").let { if (it >= 0) it else 0 }
+            val yIdx = vertexProperties.indexOf("y").let { if (it >= 0) it else 1 }
+            val zIdx = vertexProperties.indexOf("z").let { if (it >= 0) it else 2 }
+            val rIdx = vertexProperties.indexOf("red").let { if (it >= 0) it else vertexProperties.indexOf("r") }
+            val gIdx = vertexProperties.indexOf("green").let { if (it >= 0) it else vertexProperties.indexOf("g") }
+            val bIdx = vertexProperties.indexOf("blue").let { if (it >= 0) it else vertexProperties.indexOf("b") }
+
             for (v in 0 until vertexCount) {
                 if (line == null) break
                 val parts = line.trim().split("\\s+".toRegex())
                 if (parts.size >= 3) {
-                    val x = parts[0].toFloatOrNull() ?: 0f
-                    val y = parts[1].toFloatOrNull() ?: 0f
-                    val z = parts[2].toFloatOrNull() ?: 0f
+                    val x = parts.getOrNull(xIdx)?.toFloatOrNull() ?: 0f
+                    val y = parts.getOrNull(yIdx)?.toFloatOrNull() ?: 0f
+                    val z = parts.getOrNull(zIdx)?.toFloatOrNull() ?: 0f
                     vertices.add(Vec3(x, y, z))
 
-                    if (parts.size >= 6) {
-                        val r = parts[3].toIntOrNull()?.coerceIn(0, 255) ?: 255
-                        val g = parts[4].toIntOrNull()?.coerceIn(0, 255) ?: 255
-                        val b = parts[5].toIntOrNull()?.coerceIn(0, 255) ?: 255
+                    if (rIdx >= 0 && gIdx >= 0 && bIdx >= 0 && parts.size > maxOf(rIdx, gIdx, bIdx)) {
+                        val r = parts.getOrNull(rIdx)?.toFloatOrNull()?.let { if (it <= 1.0f && it > 0f && parts[rIdx].contains('.')) (it * 255).toInt() else it.toInt() }?.coerceIn(0, 255) ?: 220
+                        val g = parts.getOrNull(gIdx)?.toFloatOrNull()?.let { if (it <= 1.0f && it > 0f && parts[gIdx].contains('.')) (it * 255).toInt() else it.toInt() }?.coerceIn(0, 255) ?: 220
+                        val b = parts.getOrNull(bIdx)?.toFloatOrNull()?.let { if (it <= 1.0f && it > 0f && parts[bIdx].contains('.')) (it * 255).toInt() else it.toInt() }?.coerceIn(0, 255) ?: 220
                         val col = (0xFFL shl 24) or ((r.toLong() and 0xFF) shl 16) or ((g.toLong() and 0xFF) shl 8) or (b.toLong() and 0xFF)
                         vertexColors.add(col)
                     } else {
-                        vertexColors.add(0L)
+                        vertexColors.add(0xFFD6C5ADL)
                     }
                 }
                 line = reader.readLine()
@@ -1905,12 +1966,12 @@ object ModelFileLoader {
                     val indices = (1..count).mapNotNull { parts.getOrNull(it)?.toIntOrNull() }
                     if (indices.size >= 3) {
                         val v0 = vertices[indices[0]]
-                        val col0 = vertexColors.getOrNull(indices[0]) ?: 0L
+                        val col0 = vertexColors.getOrNull(indices[0]) ?: 0xFFD6C5ADL
                         for (i in 1 until indices.size - 1) {
                             val v1 = vertices[indices[i]]
                             val v2 = vertices[indices[i + 1]]
                             val norm = (v1 - v0).cross(v2 - v0).normalize()
-                            val triCol = if (col0 != 0L) col0 else (vertexColors.getOrNull(indices[i]) ?: 0L)
+                            val triCol = if (col0 != 0L) col0 else (vertexColors.getOrNull(indices[i]) ?: 0xFFD6C5ADL)
                             triangles.add(Triangle(v0, v1, v2, norm, color = triCol))
                         }
                     }

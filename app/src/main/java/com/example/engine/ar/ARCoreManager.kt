@@ -1314,11 +1314,22 @@ class ARCoreManager(private val context: Context) {
 
     private fun processDepthFusion(frame: Frame) {
         var depthImage: Image? = null
+        var confidenceImage: Image? = null
         try {
+            var isRawDepth = false
             depthImage = try {
                 frame.acquireDepthImage16Bits()
             } catch (e: Exception) {
+                isRawDepth = true
                 frame.acquireRawDepthImage16Bits()
+            }
+
+            if (isRawDepth) {
+                confidenceImage = try {
+                    frame.acquireRawDepthConfidenceImage()
+                } catch (e: Exception) {
+                    null
+                }
             }
 
             if (depthImage != null) {
@@ -1328,6 +1339,9 @@ class ARCoreManager(private val context: Context) {
                     val srcWidth = depthImage.width
                     val srcHeight = depthImage.height
                     val rowStride = planes[0].rowStride
+
+                    val confBuffer = confidenceImage?.planes?.firstOrNull()?.buffer
+                    val confRowStride = confidenceImage?.planes?.firstOrNull()?.rowStride ?: 0
 
                     // Extract high-resolution 320x240 depth grid for high-precision per-pixel visual occlusion
                     val targetW = min(320, srcWidth)
@@ -1349,10 +1363,22 @@ class ARCoreManager(private val context: Context) {
                             val sx = (tx.toFloat() / targetW * srcWidth).toInt().coerceIn(0, srcWidth - 1)
                             val byteIndex = sy * rowStride + sx * 2
                             if (byteIndex + 1 < buffer.limit()) {
-                                val depthMm = buffer.getShort(byteIndex)
+                                // If confidence map is available, verify confidence value
+                                var isConfident = true
+                                if (confBuffer != null && confRowStride > 0) {
+                                    val confIdx = sy * confRowStride + sx
+                                    if (confIdx < confBuffer.limit()) {
+                                        val confVal = confBuffer.get(confIdx).toInt() and 0xFF
+                                        if (confVal < 20) { // filter out ultra low confidence noise
+                                            isConfident = false
+                                        }
+                                    }
+                                }
+
+                                val depthMm = if (isConfident) buffer.getShort(byteIndex) else 0.toShort()
                                 val depthInt = depthMm.toInt() and 0xFFFF
                                 depthGrid[ty * targetW + tx] = depthMm
-                                if (depthInt in 100..12000) {
+                                if (isConfident && depthInt in 100..12000) {
                                     val depthM = depthInt / 1000.0f
                                     sumDepthMeters += depthM
                                     if (depthM < minDepthMeters) minDepthMeters = depthM
@@ -1387,16 +1413,25 @@ class ARCoreManager(private val context: Context) {
 
                     if (validSamples > 0) {
                         val avgDepth = (sumDepthMeters / validSamples).toFloat()
-                        val isGeoFused = _geospatialInfo.value.isVPSAvailable
+                        val hasStreetscape = _streetscapeMeshes.value.isNotEmpty()
                         val occlusionRatio = if (minDepthMeters < 1.2f) ((1.2f - minDepthMeters) / 1.2f) * 100f else 0.0f
 
                         _depthFusionInfo.value = ARDepthFusionInfo(
                             isDepthActive = true,
-                            rawDepthAvailable = true,
+                            rawDepthAvailable = isRawDepth,
                             averageDepthMeters = avgDepth,
-                            closestObjectDistanceMeters = if (minDepthMeters < 50f) minDepthMeters else 0.8f,
+                            closestObjectDistanceMeters = if (minDepthMeters < 50f) minDepthMeters else null,
                             occlusionRatioPercentage = occlusionRatio,
-                            isGeospatialDepthFused = isGeoFused
+                            isGeospatialDepthFused = hasStreetscape
+                        )
+                    } else {
+                        _depthFusionInfo.value = ARDepthFusionInfo(
+                            isDepthActive = true,
+                            rawDepthAvailable = isRawDepth,
+                            averageDepthMeters = 0f,
+                            closestObjectDistanceMeters = null,
+                            occlusionRatioPercentage = 0f,
+                            isGeospatialDepthFused = false
                         )
                     }
                 }
@@ -1406,6 +1441,11 @@ class ARCoreManager(private val context: Context) {
         } catch (e: Exception) {
             Log.w(TAG, "Depth frame acquisition unavailable on current frame", e)
         } finally {
+            try {
+                confidenceImage?.close()
+            } catch (e: Exception) {
+                // Safe close
+            }
             try {
                 depthImage?.close()
             } catch (e: Exception) {

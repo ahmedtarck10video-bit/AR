@@ -136,8 +136,8 @@ data class ARFaceMeshTracking(
 data class ARDepthFusionInfo(
     val isDepthActive: Boolean = false,
     val rawDepthAvailable: Boolean = false,
-    val averageDepthMeters: Float = 1.8f,
-    val closestObjectDistanceMeters: Float = 0.5f,
+    val averageDepthMeters: Float = 0f,
+    val closestObjectDistanceMeters: Float? = null,
     val occlusionRatioPercentage: Float = 0.0f,
     val isGeospatialDepthFused: Boolean = false
 )

@@ -20,6 +20,7 @@ import com.example.math3d.Vec3
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -376,8 +377,29 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
         loadPersistentAnchors()
     }
 
+    private var arFrameLoopJob: kotlinx.coroutines.Job? = null
+
+    private fun startArFrameLoop() {
+        arFrameLoopJob?.cancel()
+        arFrameLoopJob = viewModelScope.launch(Dispatchers.Default) {
+            while (isActive) {
+                if (_uiState.value.currentMode != SpatialMode.OBJECT && arCoreManager.isSessionRunning) {
+                    val orient = _uiState.value.sensorOrientation
+                    arCoreManager.updateFrame(orient.pitch, orient.roll, orient.yaw)
+                }
+                kotlinx.coroutines.delay(16) // ~60 FPS continuous ARCore processing loop
+            }
+        }
+    }
+
+    private fun stopArFrameLoop() {
+        arFrameLoopJob?.cancel()
+        arFrameLoopJob = null
+    }
+
     override fun onCleared() {
         super.onCleared()
+        stopArFrameLoop()
         sensorTracker.stop()
         arCoreManager.destroy()
     }
@@ -389,13 +411,16 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
                 sensorTracker.start()
                 arCoreManager.isStereoPipelineActive = false
                 arCoreManager.start()
+                startArFrameLoop()
             }
             SpatialMode.MR -> {
                 sensorTracker.start()
                 arCoreManager.isStereoPipelineActive = true
                 arCoreManager.start()
+                startArFrameLoop()
             }
             SpatialMode.OBJECT -> {
+                stopArFrameLoop()
                 sensorTracker.stop()
                 arCoreManager.isStereoPipelineActive = false
                 arCoreManager.pause()

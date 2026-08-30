@@ -361,8 +361,9 @@ fun ARSuiteBottomSheet(
                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text("Geospatial Depth Fusion & Streetscape Mesh 🏢", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                                 val depth = uiState.depthFusionInfo
+                                val closestStr = depth.closestObjectDistanceMeters?.let { "${String.format("%.2f", it)}m" } ?: "None (< 10m)"
                                 Text(
-                                    text = "16-bit Sensor Depth: Avg ${String.format("%.2f", depth.averageDepthMeters)}m | Closest Obstacle: ${String.format("%.2f", depth.closestObjectDistanceMeters)}m\nOcclusion Ratio: ${String.format("%.1f", depth.occlusionRatioPercentage)}% | VPS Depth Fused: ${depth.isGeospatialDepthFused}",
+                                    text = "16-bit Sensor Depth: Avg ${String.format("%.2f", depth.averageDepthMeters)}m | Closest Obstacle: $closestStr\nOcclusion Ratio: ${String.format("%.1f", depth.occlusionRatioPercentage)}% | Streetscape Fused: ${depth.isGeospatialDepthFused}",
                                     color = Color(0xFF81D4FA),
                                     fontSize = 12.sp
                                 )
