@@ -65,21 +65,43 @@ fun StereoARViewport(
     closestDepthDistanceMeters: Float = 0f,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var modelNode by remember { mutableStateOf<ModelNode?>(null) }
     var arSceneViewRef by remember { mutableStateOf<ARSceneView?>(null) }
+    var sceneViewRef by remember { mutableStateOf<io.github.sceneview.SceneView?>(null) }
     var lastLoadedPath by remember { mutableStateOf<String?>(null) }
     val renderer3D = remember { Renderer3D() }
+
+    val isArCoreInstalled = remember {
+        try {
+            val isPackagePresent = try {
+                context.packageManager.getPackageInfo("com.google.ar.core", 0) != null
+            } catch (e: Exception) {
+                false
+            }
+            if (isPackagePresent) {
+                val availability = com.google.ar.core.ArCoreApk.getInstance().checkAvailability(context)
+                availability == com.google.ar.core.ArCoreApk.Availability.SUPPORTED_INSTALLED
+            } else {
+                false
+            }
+        } catch (e: Throwable) {
+            false
+        }
+    }
 
     DisposableEffect(Unit) {
         onDispose {
             try {
                 modelNode?.let { node ->
                     arSceneViewRef?.removeChildNode(node)
+                    sceneViewRef?.removeChildNode(node)
                     node.destroy()
                 }
                 modelNode = null
                 arSceneViewRef = null
+                sceneViewRef = null
             } catch (e: Exception) {
                 android.util.Log.w("StereoARViewport", "Cleanup warning: ${e.localizedMessage}")
             }
@@ -90,33 +112,47 @@ fun StereoARViewport(
         // =====================================================================
         // 1. MASTER ARCORE SESSION & CAMERA PASSTHROUGH (NO DUPLICATE MODEL)
         // =====================================================================
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                ARSceneView(ctx).apply {
-                    planeRenderer.isVisible = !isAnchored
-                    planeRenderer.isEnabled = true
-                    cameraStream?.isDepthOcclusionEnabled = isDepthOcclusionEnabled
-                    sessionConfiguration = { session, config ->
-                        config.depthMode = if (session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
-                            Config.DepthMode.AUTOMATIC
-                        } else {
-                            Config.DepthMode.DISABLED
+        if (isArCoreInstalled) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    ARSceneView(ctx).apply {
+                        planeRenderer.isVisible = !isAnchored
+                        planeRenderer.isEnabled = true
+                        cameraStream?.isDepthOcclusionEnabled = isDepthOcclusionEnabled
+                        sessionConfiguration = { session, config ->
+                            config.depthMode = if (session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                                Config.DepthMode.AUTOMATIC
+                            } else {
+                                Config.DepthMode.DISABLED
+                            }
+                            config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
+                            config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
+                            config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
+                            config.focusMode = Config.FocusMode.AUTO
                         }
-                        config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
-                        config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
-                        config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
-                        config.focusMode = Config.FocusMode.AUTO
+                        arSceneViewRef = this
                     }
-                    arSceneViewRef = this
+                },
+                update = { arSceneView ->
+                    arSceneViewRef = arSceneView
+                    arSceneView.cameraStream?.isDepthOcclusionEnabled = isDepthOcclusionEnabled
+                    arSceneView.planeRenderer.isVisible = !isAnchored
                 }
-            },
-            update = { arSceneView ->
-                arSceneViewRef = arSceneView
-                arSceneView.cameraStream?.isDepthOcclusionEnabled = isDepthOcclusionEnabled
-                arSceneView.planeRenderer.isVisible = !isAnchored
-            }
-        )
+            )
+        } else {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    io.github.sceneview.SceneView(ctx).apply {
+                        sceneViewRef = this
+                    }
+                },
+                update = { sceneView ->
+                    sceneViewRef = sceneView
+                }
+            )
+        }
 
         // =====================================================================
         // 2. DUAL-EYE STEREOSCOPIC MATRIX PIPELINE (LEFT EYE & RIGHT EYE)

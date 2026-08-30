@@ -309,80 +309,92 @@ class ARCoreManager(private val context: Context) {
         var instantSup = false
         var availabilityStatusMsg = "Checking ARCore..."
 
-        try {
-            val availability = ArCoreApk.getInstance().checkAvailability(context)
-            when (availability) {
-                ArCoreApk.Availability.SUPPORTED_INSTALLED -> {
-                    isInstalled = true
-                    isARCoreAvailable = true
-                    availabilityStatusMsg = "ARCore 1.47+ Ready"
-                }
-                ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD,
-                ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED -> {
-                    isInstalled = false
-                    isARCoreAvailable = false
-                    availabilityStatusMsg = "ARCore installation or update required"
-                }
-                ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE -> {
-                    isInstalled = false
-                    isARCoreAvailable = false
-                    availabilityStatusMsg = "Device not capable of hardware ARCore"
-                }
-                ArCoreApk.Availability.UNKNOWN_CHECKING -> {
-                    isInstalled = false
-                    isARCoreAvailable = false
-                    availabilityStatusMsg = "ARCore availability checking..."
-                }
-                ArCoreApk.Availability.UNKNOWN_ERROR,
-                ArCoreApk.Availability.UNKNOWN_TIMED_OUT -> {
-                    isInstalled = false
-                    isARCoreAvailable = false
-                    availabilityStatusMsg = "ARCore availability check timed out"
-                }
-                else -> {
-                    isInstalled = false
-                    isARCoreAvailable = false
-                    availabilityStatusMsg = "ARCore Unavailable"
-                }
-            }
+        val isPackagePresent = try {
+            context.packageManager.getPackageInfo("com.google.ar.core", 0) != null
+        } catch (e: PackageManager.NameNotFoundException) {
+            false
+        } catch (e: Exception) {
+            false
+        }
 
-            if (isInstalled && ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                var probeSession: Session? = null
-                try {
-                    probeSession = Session(context)
-                    depthSup = probeSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
-                    rawDepthSup = probeSession.isDepthModeSupported(Config.DepthMode.RAW_DEPTH_ONLY)
-                    geoSup = probeSession.isGeospatialModeSupported(Config.GeospatialMode.ENABLED)
-                    semSup = probeSession.isSemanticModeSupported(Config.SemanticMode.ENABLED)
-                    facesSup = true
-                    cloudSup = true
-                    streetscapeSup = geoSup
-                    imagesSup = true
-                    instantSup = true
-                } catch (e: Exception) {
-                    Log.w(TAG, "Capability probe session failed: ${e.localizedMessage}", e)
-                    depthSup = false
-                    rawDepthSup = false
-                    geoSup = false
-                    semSup = false
-                    facesSup = false
-                    cloudSup = false
-                    streetscapeSup = false
-                    imagesSup = false
-                    instantSup = false
-                } finally {
-                    try {
-                        probeSession?.close()
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Error closing probe session", e)
+        if (isPackagePresent) {
+            try {
+                val availability = ArCoreApk.getInstance().checkAvailability(context)
+                when (availability) {
+                    ArCoreApk.Availability.SUPPORTED_INSTALLED -> {
+                        isInstalled = true
+                        isARCoreAvailable = true
+                        availabilityStatusMsg = "ARCore 1.47+ Ready"
+                    }
+                    ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD -> {
+                        isInstalled = false
+                        isARCoreAvailable = false
+                        availabilityStatusMsg = "ARCore update required"
+                    }
+                    ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED -> {
+                        isInstalled = false
+                        isARCoreAvailable = false
+                        availabilityStatusMsg = "ARCore installation required"
+                    }
+                    ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE -> {
+                        isInstalled = false
+                        isARCoreAvailable = false
+                        availabilityStatusMsg = "Device not capable of hardware ARCore"
+                    }
+                    ArCoreApk.Availability.UNKNOWN_CHECKING -> {
+                        isInstalled = false
+                        isARCoreAvailable = false
+                        availabilityStatusMsg = "ARCore availability checking..."
+                    }
+                    else -> {
+                        isInstalled = false
+                        isARCoreAvailable = false
+                        availabilityStatusMsg = "ARCore Unavailable"
                     }
                 }
+
+                if (isInstalled && ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                    var probeSession: Session? = null
+                    try {
+                        probeSession = Session(context)
+                        depthSup = probeSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
+                        rawDepthSup = probeSession.isDepthModeSupported(Config.DepthMode.RAW_DEPTH_ONLY)
+                        geoSup = probeSession.isGeospatialModeSupported(Config.GeospatialMode.ENABLED)
+                        semSup = probeSession.isSemanticModeSupported(Config.SemanticMode.ENABLED)
+                        facesSup = true
+                        cloudSup = true
+                        streetscapeSup = geoSup
+                        imagesSup = true
+                        instantSup = true
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Capability probe session failed: ${e.localizedMessage}", e)
+                        depthSup = false
+                        rawDepthSup = false
+                        geoSup = false
+                        semSup = false
+                        facesSup = false
+                        cloudSup = false
+                        streetscapeSup = false
+                        imagesSup = false
+                        instantSup = false
+                    } finally {
+                        try {
+                            probeSession?.close()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error closing probe session", e)
+                        }
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "ARCore availability query failed", t)
+                isInstalled = false
+                isARCoreAvailable = false
+                availabilityStatusMsg = "ARCore query error: ${t.localizedMessage ?: "Unknown"}"
             }
-        } catch (t: Throwable) {
-            Log.e(TAG, "ARCore availability query failed", t)
+        } else {
             isInstalled = false
             isARCoreAvailable = false
-            availabilityStatusMsg = "ARCore query error: ${t.localizedMessage ?: "Unknown"}"
+            availabilityStatusMsg = "ARCore Not Installed"
         }
 
         _capabilities.value = ARCoreCapabilities(
@@ -422,6 +434,20 @@ class ARCoreManager(private val context: Context) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             isSessionRunning = false
             _trackingStatus.value = "Camera permission required"
+            _trackingQuality.value = ARTrackingStateQuality.PAUSED_OR_LOST
+            return
+        }
+
+        val isPackagePresent = try {
+            context.packageManager.getPackageInfo("com.google.ar.core", 0) != null
+        } catch (e: Exception) {
+            false
+        }
+
+        if (!isPackagePresent) {
+            isARCoreAvailable = false
+            isSessionRunning = false
+            _trackingStatus.value = "Google Play Services for AR not installed"
             _trackingQuality.value = ARTrackingStateQuality.PAUSED_OR_LOST
             return
         }
