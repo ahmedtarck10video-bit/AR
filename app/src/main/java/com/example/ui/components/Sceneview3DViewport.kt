@@ -67,6 +67,19 @@ fun Sceneview3DViewport(
                 sceneViewRef = this
             }
         },
+        onRelease = { sceneView ->
+            try {
+                currentModelNode?.let { node ->
+                    sceneView.removeChildNode(node)
+                    node.destroy()
+                }
+                currentModelNode = null
+                sceneViewRef = null
+                sceneView.destroy()
+            } catch (e: Exception) {
+                // Safe release
+            }
+        },
         update = { sceneView ->
             sceneViewRef = sceneView
             val targetModel = model

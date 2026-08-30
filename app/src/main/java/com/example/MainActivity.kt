@@ -758,36 +758,39 @@ fun takePhotoSnapshot(activity: Activity?, view: View, onBitmapReady: (Bitmap) -
     val height = if (view.height > 0) view.height else 1920
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
 
-    if (window != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+    if (window != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && view.isAttachedToWindow && window.peekDecorView() != null) {
         try {
+            val decorView = window.decorView
             val location = IntArray(2)
             view.getLocationInWindow(location)
             val rect = Rect(
                 location[0].coerceAtLeast(0),
                 location[1].coerceAtLeast(0),
-                (location[0] + width).coerceAtMost(window.decorView.width.coerceAtLeast(width)),
-                (location[1] + height).coerceAtMost(window.decorView.height.coerceAtLeast(height))
+                (location[0] + width).coerceAtMost(decorView.width.coerceAtLeast(width)),
+                (location[1] + height).coerceAtMost(decorView.height.coerceAtLeast(height))
             )
-            PixelCopy.request(
-                window,
-                rect,
-                bitmap,
-                { copyResult ->
-                    if (copyResult == PixelCopy.SUCCESS) {
-                        onBitmapReady(bitmap)
-                    } else {
-                        try {
-                            val canvas = android.graphics.Canvas(bitmap)
-                            view.draw(canvas)
+            if (rect.width() > 0 && rect.height() > 0) {
+                PixelCopy.request(
+                    window,
+                    rect,
+                    bitmap,
+                    { copyResult ->
+                        if (copyResult == PixelCopy.SUCCESS) {
                             onBitmapReady(bitmap)
-                        } catch (e: Exception) {
-                            onBitmapReady(bitmap)
+                        } else {
+                            try {
+                                val canvas = android.graphics.Canvas(bitmap)
+                                view.draw(canvas)
+                                onBitmapReady(bitmap)
+                            } catch (e: Exception) {
+                                onBitmapReady(bitmap)
+                            }
                         }
-                    }
-                },
-                Handler(Looper.getMainLooper())
-            )
-            return
+                    },
+                    Handler(Looper.getMainLooper())
+                )
+                return
+            }
         } catch (e: Exception) {
             Log.w("MainActivity", "PixelCopy failed, fallback to canvas draw", e)
         }
