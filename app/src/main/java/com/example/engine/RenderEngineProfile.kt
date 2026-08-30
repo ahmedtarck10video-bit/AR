@@ -3,9 +3,9 @@ package com.example.engine
 import androidx.compose.ui.graphics.Color
 
 /**
- * 3D & Spatial XR Rendering Framework Profiles.
+ * 3D & Spatial XR Rendering Shading Profiles.
  * Controls shading algorithms, PBR texture sampling, lighting equations, and shadow rendering.
- * Integrates RealityKit, SceneKit, ModelIO, ARKit, Filament, and Sceneview spatial engines.
+ * Provides specialized profile presets for Filament PBR, Real-time Mobile Shading, Studio Lighting, and High-Fidelity Ray-tracing.
  */
 enum class RenderEngineProfile(
     val title: String,
@@ -19,10 +19,10 @@ enum class RenderEngineProfile(
     val useFilmicToneMapping: Boolean
 ) {
     REALITYKIT(
-        title = "RealityKit Spatial Engine",
-        shortName = "RealityKit",
-        subtitle = "Apple Spatial Computing & MaterialX PBR",
-        description = "Advanced visionOS-grade physically based rendering, dynamic Fresnel Schlick reflections, and spatial environment mapping.",
+        title = "PBR Ultra Quality Profile",
+        shortName = "Ultra PBR",
+        subtitle = "Physically Based Rendering & Specular Reflections",
+        description = "Advanced vision-grade physically based rendering, dynamic Fresnel Schlick reflections, and spatial environment mapping.",
         themeColor = Color(0xFF00E5FF),
         pbrRoughness = 0.22f,
         specularMultiplier = 1.40f,
@@ -30,9 +30,9 @@ enum class RenderEngineProfile(
         useFilmicToneMapping = true
     ),
     SCENEKIT(
-        title = "SceneKit 3D Engine",
-        shortName = "SceneKit",
-        subtitle = "High-Precision 3D Scene Graph Renderer",
+        title = "Multi-Pass Studio Profile",
+        shortName = "Studio",
+        subtitle = "High-Precision 3D Scene Graph Lighting",
         description = "Multi-pass lighting pipeline, dynamic Phong/PBR specular highlights, and real-time volumetric shadows.",
         themeColor = Color(0xFF9D4EDD),
         pbrRoughness = 0.28f,
@@ -41,10 +41,10 @@ enum class RenderEngineProfile(
         useFilmicToneMapping = true
     ),
     ARKIT(
-        title = "ARKit Spatial Tracking Engine",
-        shortName = "ARKit",
-        subtitle = "Visual Inertial Odometry & Anchoring",
-        description = "6-DoF SLAM tracking, horizontal/vertical plane anchoring, and realistic camera passthrough depth occlusion.",
+        title = "AR Low-Latency Profile",
+        shortName = "Low Latency",
+        subtitle = "Visual Inertial Odometry & Anchoring Preset",
+        description = "Optimized for 6-DoF SLAM tracking, fast frame rendering, and realistic camera passthrough depth occlusion.",
         themeColor = Color(0xFF00FF88),
         pbrRoughness = 0.25f,
         specularMultiplier = 1.30f,
@@ -52,10 +52,10 @@ enum class RenderEngineProfile(
         useFilmicToneMapping = true
     ),
     MODELIO(
-        title = "ModelIO Universal Asset Pipeline",
-        shortName = "ModelIO",
-        subtitle = "Universal 3D Asset I/O & Mesh Processing",
-        description = "Direct vertex attribute extraction, UV texture coordinate mapping, and USDZ/GLB spatial mesh synthesis.",
+        title = "Mobile Fast Profile",
+        shortName = "Fast Mobile",
+        subtitle = "Low Power & High Performance Rendering",
+        description = "Direct vertex attribute extraction, UV texture coordinate mapping, and low-power spatial mesh synthesis.",
         themeColor = Color(0xFFFFB703),
         pbrRoughness = 0.35f,
         specularMultiplier = 1.05f,
@@ -63,7 +63,7 @@ enum class RenderEngineProfile(
         useFilmicToneMapping = true
     ),
     FILAMENT(
-        title = "Google Filament",
+        title = "Google Filament PBR",
         shortName = "Filament",
         subtitle = "Physically Based Real-Time PBR Engine",
         description = "High-precision HDRi spherical irradiance, Cook-Torrance specular reflections, and ACES filmic highlight compression.",
@@ -74,7 +74,7 @@ enum class RenderEngineProfile(
         useFilmicToneMapping = true
     ),
     SCENEVIEW(
-        title = "Sceneview 3D",
+        title = "Sceneview Dynamic Profile",
         shortName = "Sceneview",
         subtitle = "Jetpack Compose + Filament GLB Engine",
         description = "Optimized for glTF/GLB PBR material textures, UV texture sampling, and seamless AR spatial tracking.",
@@ -85,4 +85,3 @@ enum class RenderEngineProfile(
         useFilmicToneMapping = true
     )
 }
-
