@@ -387,7 +387,7 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
                     val orient = _uiState.value.sensorOrientation
                     arCoreManager.updateFrame(orient.pitch, orient.roll, orient.yaw)
                 }
-                kotlinx.coroutines.delay(16) // ~60 FPS continuous ARCore processing loop
+                kotlinx.coroutines.delay(33) // ~30 FPS lightweight sensor frame loop
             }
         }
     }

@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import android.net.Uri
+import android.view.MotionEvent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -64,10 +65,13 @@ fun Sceneview3DViewport(
     AndroidView(
         modifier = modifier.fillMaxSize(),
         factory = { ctx ->
-            SceneView(ctx).apply {
+            object : SceneView(ctx) {
+                override fun onTouchEvent(event: MotionEvent): Boolean {
+                    return false
+                }
+            }.apply {
                 if (isTransparent) {
                     setZOrderMediaOverlay(true)
-                    holder.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
                 }
                 cameraNode.position = Position(0f, 0f, 3.5f)
                 sceneViewRef = this
@@ -111,8 +115,12 @@ fun Sceneview3DViewport(
                 loadedModelPath = targetPath
 
                 // Dynamic camera distance framing based on metric bounds
-                val maxDim = maxOf(targetModel.realWorldHeightMeters, targetModel.realWorldWidthMeters, targetModel.realWorldDepthMeters)
-                val targetCameraDist = maxOf(1.8f, maxDim * 2.2f)
+                val targetCameraDist = if (isTransparent) {
+                    2.8f
+                } else {
+                    val maxDim = maxOf(targetModel.realWorldHeightMeters, targetModel.realWorldWidthMeters, targetModel.realWorldDepthMeters)
+                    maxOf(1.8f, maxDim * 2.2f)
+                }
                 sceneView.cameraNode.position = Position(0f, 0f, targetCameraDist)
 
                 coroutineScope.launch {

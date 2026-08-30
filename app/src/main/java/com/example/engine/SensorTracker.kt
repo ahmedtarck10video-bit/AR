@@ -44,18 +44,18 @@ class SensorTracker(context: Context) : SensorEventListener {
         if (isRunning || sensorManager == null) return
         try {
             if (rotationVectorSensor != null) {
-                sensorManager.registerListener(this, rotationVectorSensor, SensorManager.SENSOR_DELAY_GAME)
+                sensorManager.registerListener(this, rotationVectorSensor, SensorManager.SENSOR_DELAY_UI)
                 isRunning = true
             } else {
                 if (accelerometerSensor != null) {
-                    sensorManager.registerListener(this, accelerometerSensor, SensorManager.SENSOR_DELAY_GAME)
+                    sensorManager.registerListener(this, accelerometerSensor, SensorManager.SENSOR_DELAY_UI)
                     isRunning = true
                 }
                 if (magneticSensor != null) {
-                    sensorManager.registerListener(this, magneticSensor, SensorManager.SENSOR_DELAY_GAME)
+                    sensorManager.registerListener(this, magneticSensor, SensorManager.SENSOR_DELAY_UI)
                 }
                 if (gyroSensor != null) {
-                    sensorManager.registerListener(this, gyroSensor, SensorManager.SENSOR_DELAY_GAME)
+                    sensorManager.registerListener(this, gyroSensor, SensorManager.SENSOR_DELAY_UI)
                 }
             }
         } catch (e: Exception) {
@@ -85,16 +85,29 @@ class SensorTracker(context: Context) : SensorEventListener {
     private var filteredYaw = 0f
     private val filterAlpha = 0.22f // Exponential Smoothing Factor for stable AR Anchoring
 
+    private var lastEmittedPitch = 0f
+    private var lastEmittedRoll = 0f
+    private var lastEmittedYaw = 0f
+
     private fun updateSmoothedOrientation(rawPitch: Float, rawRoll: Float, rawYaw: Float) {
         filteredPitch = filteredPitch + filterAlpha * (rawPitch - filteredPitch)
         filteredRoll = filteredRoll + filterAlpha * (rawRoll - filteredRoll)
         filteredYaw = filteredYaw + filterAlpha * (rawYaw - filteredYaw)
 
-        _orientation.value = SensorOrientation(
-            pitch = filteredPitch,
-            roll = filteredRoll,
-            yaw = filteredYaw
-        )
+        val dP = kotlin.math.abs(filteredPitch - lastEmittedPitch)
+        val dR = kotlin.math.abs(filteredRoll - lastEmittedRoll)
+        val dY = kotlin.math.abs(filteredYaw - lastEmittedYaw)
+
+        if (dP > 0.02f || dR > 0.02f || dY > 0.02f) {
+            lastEmittedPitch = filteredPitch
+            lastEmittedRoll = filteredRoll
+            lastEmittedYaw = filteredYaw
+            _orientation.value = SensorOrientation(
+                pitch = filteredPitch,
+                roll = filteredRoll,
+                yaw = filteredYaw
+            )
+        }
     }
 
     override fun onSensorChanged(event: SensorEvent?) {

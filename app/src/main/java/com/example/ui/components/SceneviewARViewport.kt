@@ -66,16 +66,22 @@ fun SceneviewARViewport(
             } catch (e: Exception) {
                 false
             }
-            val availability = ArCoreApk.getInstance().checkAvailability(context)
-            isPkgInstalled && availability == ArCoreApk.Availability.SUPPORTED_INSTALLED
+            if (isPkgInstalled) {
+                val availability = ArCoreApk.getInstance().checkAvailability(context)
+                availability == ArCoreApk.Availability.SUPPORTED_INSTALLED
+            } else {
+                false
+            }
         } catch (e: Throwable) {
             false
         }
     }
 
     if (!isArCoreSupported) {
-        // Fallback for emulators or devices without Google Play Services for AR installed
-        Box(modifier = modifier.fillMaxSize().background(Color(0xFF090D16))) {
+        // Universal AR Mode: Live Camera Feed in background with 3D model rendered transparently on top
+        Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
+            LiveCameraPreview(modifier = Modifier.fillMaxSize())
+
             Sceneview3DViewport(
                 model = model,
                 rotX = rotX,
@@ -86,35 +92,9 @@ fun SceneviewARViewport(
                 panY = panY,
                 surfaceAnchor = surfaceAnchor,
                 isAnchored = isAnchored,
+                isTransparent = true,
                 modifier = Modifier.fillMaxSize()
             )
-
-            // AR Simulation Badge
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 76.dp)
-                    .background(Color(0xCC0F172A), RoundedCornerShape(20.dp))
-                    .padding(horizontal = 14.dp, vertical = 6.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Info,
-                        contentDescription = null,
-                        tint = Color(0xFF38BDF8),
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        "AR Spatial Simulation Mode (ARCore APK not present on device/emulator)",
-                        color = Color(0xFFE2E8F0),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
         }
         return
     }
