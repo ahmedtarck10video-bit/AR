@@ -2,6 +2,7 @@ package com.example.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.AndroidViewModel
@@ -11,6 +12,8 @@ import com.example.engine.RenderEngineProfile
 import com.example.engine.SensorOrientation
 import com.example.engine.SensorTracker
 import com.example.engine.ar.*
+import com.example.engine.media.MediaStoreHelper
+import com.example.engine.media.SavedMediaItem
 import com.example.math3d.Model3D
 import com.example.math3d.ModelFileLoader
 import com.example.math3d.Vec3
@@ -188,6 +191,9 @@ data class MRUiState(
     val isFaceTrackingActive: Boolean = false,
     val persistentAnchors: List<PersistentARAnchorData> = emptyList(),
     val recordedSessions: List<RecordedSessionItem> = emptyList(),
+    val galleryCaptures: List<SavedMediaItem> = emptyList(),
+    val isCapturingPhoto: Boolean = false,
+    val lastCapturedMediaUri: Uri? = null,
     val cloudAnchorStatus: String? = null,
     val isArSuitePanelOpen: Boolean = false
 )
@@ -197,6 +203,7 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
     private val sensorTracker = SensorTracker(application)
     val arCoreManager = ARCoreManager(application)
     private var recordingJob: Job? = null
+    private var currentRecordingFile: File? = null
 
     private val _uiState = MutableStateFlow(MRUiState())
     val uiState: StateFlow<MRUiState> = _uiState.asStateFlow()
@@ -210,12 +217,15 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
             selectedModelIndex = 0
         )
 
+        // Load existing gallery photos and recordings
+        loadGalleryCaptures(application)
+
         // Pre-export procedural default models to GLB on background IO dispatcher for instant GPU PBR rendering
         viewModelScope.launch(Dispatchers.IO) {
             val updatedModels = defaultModels.map { m ->
                 val glbPath = ModelFileLoader.exportTrianglesToGlbFile(application, m.name, m.triangles)
                 if (glbPath != null) {
-                    m.copy(localFilePath = glbPath, isGlbOrGltf = true, triangles = emptyList())
+                    m.copy(localFilePath = glbPath, isGlbOrGltf = true, triangles = m.triangles)
                 } else {
                     m
                 }
@@ -653,17 +663,59 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
 
     fun clearAll() {
         arCoreManager.clearAllAnchors()
-        _uiState.value = _uiState.value.copy(surfaceAnchor = null, arAnchorPlaced = false)
+        _uiState.value = _uiState.value.copy(
+            surfaceAnchor = null,
+            arAnchorPlaced = false,
+            currentModel = null,
+            selectedModelIndex = -1
+        )
         resetView()
-        showNotification("Scene Cleared")
+        showNotification("Scene Cleared & Model Removed 🧹")
     }
 
     fun triggerPhotoCapture() {
+        _uiState.value = _uiState.value.copy(isCapturingPhoto = true)
+    }
+
+    fun onPhotoCaptureCompleted() {
+        _uiState.value = _uiState.value.copy(isCapturingPhoto = false)
+    }
+
+    fun saveCapturedPhoto(bitmap: Bitmap, context: Context? = null) {
+        val ctx = context ?: getApplication<Application>()
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(showPhotoFlash = true)
+            _uiState.value = _uiState.value.copy(showPhotoFlash = true, isCapturingPhoto = false)
+            val savedItem = MediaStoreHelper.saveImageToGallery(ctx, bitmap, "Spatial_Photo")
             delay(120)
-            _uiState.value = _uiState.value.copy(showPhotoFlash = false)
-            showNotification("Spatial Snapshot Captured 📸")
+            _uiState.value = _uiState.value.copy(
+                showPhotoFlash = false,
+                lastCapturedMediaUri = savedItem?.uri
+            )
+            loadGalleryCaptures(ctx)
+            if (savedItem != null) {
+                showNotification("Photo Saved to Gallery 📸 (${savedItem.formattedSize})")
+            } else {
+                showNotification("Photo Snapshot Saved 📸")
+            }
+        }
+    }
+
+    fun loadGalleryCaptures(context: Context? = null) {
+        val ctx = context ?: getApplication<Application>()
+        viewModelScope.launch {
+            val items = MediaStoreHelper.loadGalleryCaptures(ctx)
+            _uiState.value = _uiState.value.copy(galleryCaptures = items)
+        }
+    }
+
+    fun deleteGalleryItem(item: SavedMediaItem, context: Context? = null) {
+        val ctx = context ?: getApplication<Application>()
+        viewModelScope.launch {
+            val ok = MediaStoreHelper.deleteMediaItem(ctx, item)
+            if (ok) {
+                loadGalleryCaptures(ctx)
+                showNotification("Removed from Gallery 🗑️")
+            }
         }
     }
 
@@ -923,9 +975,25 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
             arCoreManager.stopRecording()
             recordingJob?.cancel()
             _uiState.value = _uiState.value.copy(isRecording = false, recordingSeconds = 0)
-            showNotification("AR Session Recording Saved 🎥 (.mp4)")
+
+            val recFile = currentRecordingFile
+            if (recFile != null && recFile.exists() && recFile.length() > 0) {
+                viewModelScope.launch {
+                    val savedItem = MediaStoreHelper.saveVideoToGallery(context, recFile, "Spatial_AR_Record")
+                    loadGalleryCaptures(context)
+                    if (savedItem != null) {
+                        showNotification("Recording Saved to Gallery 🎥 (${savedItem.formattedSize})")
+                    } else {
+                        showNotification("AR Session Recording Saved 🎥 (.mp4)")
+                    }
+                }
+            } else {
+                showNotification("AR Session Recording Stopped 🎥")
+            }
+            currentRecordingFile = null
         } else {
             val file = File(context.cacheDir, "ar_session_${System.currentTimeMillis()}.mp4")
+            currentRecordingFile = file
             arCoreManager.startRecording(file)
             _uiState.value = _uiState.value.copy(isRecording = true, recordingSeconds = 0)
             recordingJob = viewModelScope.launch {

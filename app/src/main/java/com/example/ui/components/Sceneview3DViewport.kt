@@ -73,7 +73,18 @@ fun Sceneview3DViewport(
             val targetModel = model
             val targetPath = targetModel?.localFilePath ?: targetModel?.fileUri?.toString()
 
-            if (targetModel != null && targetPath != null && targetPath != lastLoadedPath) {
+            if (targetModel == null || targetPath == null) {
+                currentModelNode?.let { oldNode ->
+                    try {
+                        sceneView.removeChildNode(oldNode)
+                        oldNode.destroy()
+                    } catch (e: Exception) {
+                        // Safe cleanup
+                    }
+                }
+                currentModelNode = null
+                lastLoadedPath = null
+            } else if (targetPath != lastLoadedPath || currentModelNode == null) {
                 lastLoadedPath = targetPath
 
                 // Dynamic camera distance framing based on authentic metric bounds without mutating geometry scale
@@ -97,8 +108,12 @@ fun Sceneview3DViewport(
 
                         if (instance != null) {
                             currentModelNode?.let { oldNode ->
-                                sceneView.removeChildNode(oldNode)
-                                oldNode.destroy()
+                                try {
+                                    sceneView.removeChildNode(oldNode)
+                                    oldNode.destroy()
+                                } catch (e: Exception) {
+                                    // Safe cleanup
+                                }
                             }
                             val newNode = ModelNode(
                                 modelInstance = instance

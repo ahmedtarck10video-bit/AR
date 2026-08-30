@@ -186,7 +186,18 @@ fun SceneviewARViewport(
                         finalRotation = Rotation(0f, 0f, 0f)
                     }
 
-                    if (targetModel != null && targetPath != null && targetPath != lastLoadedPath) {
+                    if (targetModel == null || targetPath == null) {
+                        currentModelNode?.let { oldNode ->
+                            try {
+                                arSceneView.removeChildNode(oldNode)
+                                oldNode.destroy()
+                            } catch (e: Exception) {
+                                // Safe cleanup
+                            }
+                        }
+                        currentModelNode = null
+                        lastLoadedPath = null
+                    } else if (targetPath != lastLoadedPath || currentModelNode == null) {
                         lastLoadedPath = targetPath
                         coroutineScope.launch {
                             try {
@@ -202,8 +213,12 @@ fun SceneviewARViewport(
 
                                 if (instance != null) {
                                     currentModelNode?.let { oldNode ->
-                                        arSceneView.removeChildNode(oldNode)
-                                        oldNode.destroy()
+                                        try {
+                                            arSceneView.removeChildNode(oldNode)
+                                            oldNode.destroy()
+                                        } catch (e: Exception) {
+                                            // Safe cleanup
+                                        }
                                     }
                                     val newNode = ModelNode(
                                         modelInstance = instance
@@ -253,7 +268,18 @@ fun SceneviewARViewport(
 
                     val targetPos = Position(x = panX * 0.005f, y = -panY * 0.005f, z = 0f)
 
-                    if (targetModel != null && targetPath != null && targetPath != lastLoadedPath) {
+                    if (targetModel == null || targetPath == null) {
+                        currentModelNode?.let { oldNode ->
+                            try {
+                                sceneView.removeChildNode(oldNode)
+                                oldNode.destroy()
+                            } catch (e: Exception) {
+                                // Safe cleanup
+                            }
+                        }
+                        currentModelNode = null
+                        lastLoadedPath = null
+                    } else if (targetPath != lastLoadedPath || currentModelNode == null) {
                         lastLoadedPath = targetPath
                         coroutineScope.launch {
                             try {
@@ -269,8 +295,12 @@ fun SceneviewARViewport(
 
                                 if (instance != null) {
                                     currentModelNode?.let { oldNode ->
-                                        sceneView.removeChildNode(oldNode)
-                                        oldNode.destroy()
+                                        try {
+                                            sceneView.removeChildNode(oldNode)
+                                            oldNode.destroy()
+                                        } catch (e: Exception) {
+                                            // Safe cleanup
+                                        }
                                     }
                                     val newNode = ModelNode(
                                         modelInstance = instance

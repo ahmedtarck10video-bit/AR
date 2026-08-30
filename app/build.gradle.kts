@@ -90,4 +90,7 @@ dependencies {
     // Sceneview 3D and AR with Filament PBR Engine
     implementation("io.github.sceneview:sceneview:2.2.1")
     implementation("io.github.sceneview:arsceneview:2.2.1")
+
+    // Image loading for Gallery captures
+    implementation("io.coil-kt:coil-compose:2.6.0")
 }

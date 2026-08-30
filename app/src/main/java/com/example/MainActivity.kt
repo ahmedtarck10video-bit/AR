@@ -1,9 +1,19 @@
 package com.example
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Rect
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import android.view.PixelCopy
+import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -32,6 +42,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
@@ -73,6 +84,21 @@ fun SpatialMainScreen(
     viewModel: MixedRealityViewModel
 ) {
     val context = LocalContext.current
+    val currentView = LocalView.current
+    val activity = context as? Activity
+
+    fun captureViewportToGallery() {
+        takePhotoSnapshot(activity, currentView) { bitmap ->
+            viewModel.saveCapturedPhoto(bitmap, context)
+        }
+    }
+
+    LaunchedEffect(uiState.isCapturingPhoto) {
+        if (uiState.isCapturingPhoto) {
+            captureViewportToGallery()
+        }
+    }
+
     var hasCameraPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -119,6 +145,21 @@ fun SpatialMainScreen(
                         )
                 ) {
                     if (currentModel != null) {
+                        val spinAngle = if (uiState.isAutoSpin) {
+                            val infiniteTransition = rememberInfiniteTransition(label = "spin")
+                            val angle by infiniteTransition.animateFloat(
+                                initialValue = 0f,
+                                targetValue = 6.28318f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(durationMillis = 6000, easing = LinearEasing)
+                                ),
+                                label = "spinAngle"
+                            )
+                            angle
+                        } else {
+                            0f
+                        }
+
                         Sceneview3DViewport(
                             model = currentModel,
                             rotX = uiState.rotX,
@@ -128,7 +169,7 @@ fun SpatialMainScreen(
                             panX = uiState.panX,
                             panY = uiState.panY,
                             isAutoSpin = uiState.isAutoSpin,
-                            autoSpinAngle = 0f,
+                            autoSpinAngle = spinAngle,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .pointerInput(Unit) {
@@ -477,8 +518,8 @@ fun SpatialMainScreen(
         ) {
             AppleLiquidBottomControls(
                 isRecording = uiState.isRecording,
-                onPhotoClick = { viewModel.triggerPhotoCapture() },
-                onRecClick = { viewModel.toggleRecording() },
+                onPhotoClick = { captureViewportToGallery() },
+                onRecClick = { viewModel.toggleRecording(context) },
                 onOpenClick = {
                     filePickerLauncher.launch("*/*")
                 },
@@ -729,3 +770,57 @@ fun AppleLiquidBottomControls(
         }
     }
 }
+
+/**
+ * Captures the current view/window to a high-resolution Bitmap for Gallery persistence.
+ */
+fun takePhotoSnapshot(activity: Activity?, view: View, onBitmapReady: (Bitmap) -> Unit) {
+    val window = activity?.window
+    val width = if (view.width > 0) view.width else 1080
+    val height = if (view.height > 0) view.height else 1920
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+
+    if (window != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        try {
+            val location = IntArray(2)
+            view.getLocationInWindow(location)
+            val rect = Rect(
+                location[0].coerceAtLeast(0),
+                location[1].coerceAtLeast(0),
+                (location[0] + width).coerceAtMost(window.decorView.width.coerceAtLeast(width)),
+                (location[1] + height).coerceAtMost(window.decorView.height.coerceAtLeast(height))
+            )
+            PixelCopy.request(
+                window,
+                rect,
+                bitmap,
+                { copyResult ->
+                    if (copyResult == PixelCopy.SUCCESS) {
+                        onBitmapReady(bitmap)
+                    } else {
+                        try {
+                            val canvas = android.graphics.Canvas(bitmap)
+                            view.draw(canvas)
+                            onBitmapReady(bitmap)
+                        } catch (e: Exception) {
+                            onBitmapReady(bitmap)
+                        }
+                    }
+                },
+                Handler(Looper.getMainLooper())
+            )
+            return
+        } catch (e: Exception) {
+            Log.w("MainActivity", "PixelCopy failed, fallback to canvas draw", e)
+        }
+    }
+
+    try {
+        val canvas = android.graphics.Canvas(bitmap)
+        view.draw(canvas)
+    } catch (e: Exception) {
+        Log.w("MainActivity", "Canvas draw fallback error", e)
+    }
+    onBitmapReady(bitmap)
+}
+
