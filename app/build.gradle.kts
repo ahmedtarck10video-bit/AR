@@ -1,3 +1,5 @@
+import java.util.Base64
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -22,10 +24,24 @@ android {
 
     signingConfigs {
         create("debugConfig") {
-            storeFile = file("${rootDir}/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+            val keystoreFile = file("${rootDir}/debug.keystore")
+            if (!keystoreFile.exists()) {
+                val base64File = file("${rootDir}/debug.keystore.base64")
+                if (base64File.exists()) {
+                    try {
+                        val decoded = Base64.getDecoder().decode(base64File.readText().trim())
+                        keystoreFile.writeBytes(decoded)
+                    } catch (e: Exception) {
+                        // fallback
+                    }
+                }
+            }
+            if (keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
     }
 
