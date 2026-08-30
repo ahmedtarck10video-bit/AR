@@ -31,6 +31,8 @@ fun Sceneview3DViewport(
     scale: Float = 1.0f,
     panX: Float = 0f,
     panY: Float = 0f,
+    surfaceAnchor: com.example.engine.ar.ARSurfaceAnchor? = null,
+    isAnchored: Boolean = false,
     isAutoSpin: Boolean = false,
     autoSpinAngle: Float = 0f,
     isTransparent: Boolean = false,
@@ -39,7 +41,8 @@ fun Sceneview3DViewport(
     val coroutineScope = rememberCoroutineScope()
     var currentModelNode by remember { mutableStateOf<ModelNode?>(null) }
     var sceneViewRef by remember { mutableStateOf<SceneView?>(null) }
-    var lastLoadedPath by remember { mutableStateOf<String?>(null) }
+    var loadedModelPath by remember { mutableStateOf<String?>(null) }
+    var isLoadingModel by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -50,6 +53,8 @@ fun Sceneview3DViewport(
                 }
                 currentModelNode = null
                 sceneViewRef = null
+                isLoadingModel = false
+                loadedModelPath = null
             } catch (e: Exception) {
                 // Safe cleanup
             }
@@ -62,6 +67,7 @@ fun Sceneview3DViewport(
             SceneView(ctx).apply {
                 if (isTransparent) {
                     setZOrderMediaOverlay(true)
+                    holder.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
                 }
                 cameraNode.position = Position(0f, 0f, 3.5f)
                 sceneViewRef = this
@@ -75,7 +81,8 @@ fun Sceneview3DViewport(
                 }
                 currentModelNode = null
                 sceneViewRef = null
-                sceneView.destroy()
+                isLoadingModel = false
+                loadedModelPath = null
             } catch (e: Exception) {
                 // Safe release
             }
@@ -86,20 +93,24 @@ fun Sceneview3DViewport(
             val targetPath = targetModel?.localFilePath ?: targetModel?.fileUri?.toString()
 
             if (targetModel == null || targetPath == null) {
-                currentModelNode?.let { oldNode ->
+                if (currentModelNode != null) {
                     try {
-                        sceneView.removeChildNode(oldNode)
-                        oldNode.destroy()
+                        currentModelNode?.let { oldNode ->
+                            sceneView.removeChildNode(oldNode)
+                            oldNode.destroy()
+                        }
                     } catch (e: Exception) {
                         // Safe cleanup
                     }
+                    currentModelNode = null
                 }
-                currentModelNode = null
-                lastLoadedPath = null
-            } else if (targetPath != lastLoadedPath || currentModelNode == null) {
-                lastLoadedPath = targetPath
+                loadedModelPath = null
+                isLoadingModel = false
+            } else if (targetPath != loadedModelPath && !isLoadingModel) {
+                isLoadingModel = true
+                loadedModelPath = targetPath
 
-                // Dynamic camera distance framing based on authentic metric bounds without mutating geometry scale
+                // Dynamic camera distance framing based on metric bounds
                 val maxDim = maxOf(targetModel.realWorldHeightMeters, targetModel.realWorldWidthMeters, targetModel.realWorldDepthMeters)
                 val targetCameraDist = maxOf(1.8f, maxDim * 2.2f)
                 sceneView.cameraNode.position = Position(0f, 0f, targetCameraDist)
@@ -109,7 +120,6 @@ fun Sceneview3DViewport(
                         val filePath = targetModel.localFilePath
                         val file = if (filePath != null) File(filePath) else null
                         
-                        // Filament engine calls must run on the Main/GL thread to prevent unadopted thread panics
                         val instance = if (file != null && file.exists()) {
                             sceneView.modelLoader.createModelInstance(file)
                         } else if (targetModel.fileUri != null) {
@@ -130,9 +140,12 @@ fun Sceneview3DViewport(
                             val newNode = ModelNode(
                                 modelInstance = instance
                             ).apply {
-                                this.position = Position(x = panX * 0.005f, y = -panY * 0.005f, z = 0f)
+                                val posX = if (isAnchored && surfaceAnchor != null) surfaceAnchor.position.x + (panX * 0.002f) else panX * 0.005f
+                                val posY = if (isAnchored && surfaceAnchor != null) surfaceAnchor.position.y - (panY * 0.002f) else -panY * 0.005f
+                                val posZ = if (isAnchored && surfaceAnchor != null) (surfaceAnchor.position.z - 3.5f).coerceIn(-5f, 2f) else 0f
+                                this.position = Position(x = posX, y = posY, z = posZ)
                                 this.scale = Scale(scale, scale, scale)
-                                val finalRotY = ((rotY + if (isAutoSpin) autoSpinAngle else 0f) * 180f / Math.PI.toFloat())
+                                val finalRotY = ((rotY + (surfaceAnchor?.rotationY ?: 0f) + if (isAutoSpin) autoSpinAngle else 0f) * 180f / Math.PI.toFloat())
                                 val finalRotX = (rotX * 180f / Math.PI.toFloat())
                                 val finalRotZ = (rotZ * 180f / Math.PI.toFloat())
                                 this.rotation = Rotation(x = finalRotX, y = finalRotY, z = finalRotZ)
@@ -142,13 +155,18 @@ fun Sceneview3DViewport(
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
+                    } finally {
+                        isLoadingModel = false
                     }
                 }
             } else {
                 currentModelNode?.let { node ->
-                    node.position = Position(x = panX * 0.005f, y = -panY * 0.005f, z = 0f)
+                    val posX = if (isAnchored && surfaceAnchor != null) surfaceAnchor.position.x + (panX * 0.002f) else panX * 0.005f
+                    val posY = if (isAnchored && surfaceAnchor != null) surfaceAnchor.position.y - (panY * 0.002f) else -panY * 0.005f
+                    val posZ = if (isAnchored && surfaceAnchor != null) (surfaceAnchor.position.z - 3.5f).coerceIn(-5f, 2f) else 0f
+                    node.position = Position(x = posX, y = posY, z = posZ)
                     node.scale = Scale(scale, scale, scale)
-                    val finalRotY = ((rotY + if (isAutoSpin) autoSpinAngle else 0f) * 180f / Math.PI.toFloat())
+                    val finalRotY = ((rotY + (surfaceAnchor?.rotationY ?: 0f) + if (isAutoSpin) autoSpinAngle else 0f) * 180f / Math.PI.toFloat())
                     val finalRotX = (rotX * 180f / Math.PI.toFloat())
                     val finalRotZ = (rotZ * 180f / Math.PI.toFloat())
                     node.rotation = Rotation(x = finalRotX, y = finalRotY, z = finalRotZ)

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import com.example.engine.HdriPreset
 import com.example.engine.RenderEngineProfile
 import com.example.engine.ar.ARStereoEyeState
@@ -50,52 +51,49 @@ fun StereoARViewport(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // Zero-copy Hardware-Accelerated Live Camera Feed
+        // 1. Zero-copy Hardware-Accelerated Live Camera Feed
         CameraPreview(modifier = Modifier.fillMaxSize())
 
-        // Stereoscopic Split-View Dual Feed (Left Eye + Right Eye)
-        Row(modifier = Modifier.fillMaxSize()) {
-            // Left Eye: Filament GPU Viewport with Left Vergence Offset
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-            ) {
-                if (model != null) {
-                    Sceneview3DViewport(
-                        model = model,
-                        rotX = rotX,
-                        rotY = rotY - vergenceOffsetRad,
-                        rotZ = rotZ,
-                        scale = scale,
-                        panX = panX - halfIpdPx,
-                        panY = panY,
-                        isTransparent = true,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-            }
+        // 2. Hardware-Accelerated Filament GPU 3D Model Viewport (Transparent)
+        if (model != null) {
+            Sceneview3DViewport(
+                model = model,
+                rotX = rotX,
+                rotY = rotY,
+                rotZ = rotZ,
+                scale = scale,
+                panX = panX,
+                panY = panY,
+                surfaceAnchor = surfaceAnchor,
+                isAnchored = isAnchored,
+                isTransparent = true,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
 
-            // Right Eye: Filament GPU Viewport with Right Vergence Offset
+        // 3. Optical VR/MR Stereoscopic Center Divider & Ocular Reticles
+        Row(modifier = Modifier.fillMaxSize()) {
+            // Left Eye Field
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-            ) {
-                if (model != null) {
-                    Sceneview3DViewport(
-                        model = model,
-                        rotX = rotX,
-                        rotY = rotY + vergenceOffsetRad,
-                        rotZ = rotZ,
-                        scale = scale,
-                        panX = panX + halfIpdPx,
-                        panY = panY,
-                        isTransparent = true,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-            }
+            )
+
+            // Center Optical Interpupillary Boundary Line
+            Box(
+                modifier = Modifier
+                    .width(2.dp)
+                    .fillMaxHeight()
+                    .background(Color.White.copy(alpha = 0.35f))
+            )
+
+            // Right Eye Field
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            )
         }
     }
 }

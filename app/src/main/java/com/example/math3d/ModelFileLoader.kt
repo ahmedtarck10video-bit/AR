@@ -87,7 +87,8 @@ object ModelFileLoader {
                 context.contentResolver.openInputStream(uri) ?: return null
             }
             val bufferedStream = BufferedInputStream(inputStream, BUFFER_SIZE)
-            val triangles = parseStream(bufferedStream, parsedTargetName)
+            val modelDir = finalCachedFile?.parentFile
+            val triangles = parseStream(bufferedStream, parsedTargetName, modelDir)
             
             // Calculate real-world metric dimensions
             var realW = 0.5f
@@ -903,7 +904,7 @@ object ModelFileLoader {
      * Streams and parses 3D models of any size (up to 250MB+) without loading
      * entire giant files into heap memory where possible.
      */
-    fun parseStream(stream: BufferedInputStream, fileName: String): List<Triangle> {
+    fun parseStream(stream: BufferedInputStream, fileName: String, modelDir: java.io.File? = null): List<Triangle> {
         val lowerName = fileName.lowercase()
 
         // Peek header (first 16 bytes)
@@ -930,7 +931,7 @@ object ModelFileLoader {
             }
             lowerName.endsWith(".gltf") -> {
                 val fullText = stream.bufferedReader().use { it.readText() }
-                parseGltf(fullText)
+                parseGltf(fullText, modelDir)
             }
             lowerName.endsWith(".usda") || lowerName.endsWith(".usd") -> {
                 val fullText = stream.bufferedReader().use { it.readText() }
@@ -1312,12 +1313,19 @@ object ModelFileLoader {
                 for (i in 0 until bArray.length()) {
                     val bObj = bArray.getJSONObject(i)
                     if (bObj.has("uri")) {
-                        val uriStr = bObj.getString("uri")
+                        val rawUriStr = bObj.getString("uri")
+                        val uriStr = try { java.net.URLDecoder.decode(rawUriStr, "UTF-8") } catch (e: Exception) { rawUriStr }
                         if (uriStr.startsWith("data:") && uriStr.contains("base64,")) {
-                            val b64 = uriStr.substringAfter("base64,")
+                            val b64 = uriStr.substringAfter("base64,").trim()
                             buffersList.add(Base64.decode(b64, Base64.DEFAULT))
                         } else if (modelDir != null) {
-                            val binFile = java.io.File(modelDir, uriStr.replace('\\', '/'))
+                            val cleanRelPath = uriStr.replace('\\', '/')
+                            var binFile = java.io.File(modelDir, cleanRelPath)
+                            if (!binFile.exists()) {
+                                val altName = cleanRelPath.substringAfterLast('/')
+                                val altFile = java.io.File(modelDir, altName)
+                                if (altFile.exists()) binFile = altFile
+                            }
                             if (binFile.exists() && binFile.canRead()) {
                                 buffersList.add(binFile.readBytes())
                             }
@@ -1329,132 +1337,275 @@ object ModelFileLoader {
             val materials = root.optJSONArray("materials")
             val gltfTextureManager = GltfTextureManager(root, buffersList, modelDir)
 
+            // 1. Build Scene / Node Hierarchy World Transformations
+            fun multiply4x4(a: FloatArray, b: FloatArray): FloatArray {
+                val r = FloatArray(16)
+                for (col in 0..3) {
+                    for (row in 0..3) {
+                        var sum = 0f
+                        for (k in 0..3) {
+                            sum += a[k * 4 + row] * b[col * 4 + k]
+                        }
+                        r[col * 4 + row] = sum
+                    }
+                }
+                return r
+            }
+
+            fun getNodeLocalMatrix(node: JSONObject): FloatArray {
+                val matrixArr = node.optJSONArray("matrix")
+                if (matrixArr != null && matrixArr.length() >= 16) {
+                    val m = FloatArray(16)
+                    for (i in 0..15) m[i] = matrixArr.getDouble(i).toFloat()
+                    return m
+                }
+
+                val scaleArr = node.optJSONArray("scale")
+                val sx = if (scaleArr != null && scaleArr.length() >= 3) scaleArr.getDouble(0).toFloat() else 1.0f
+                val sy = if (scaleArr != null && scaleArr.length() >= 3) scaleArr.getDouble(1).toFloat() else 1.0f
+                val sz = if (scaleArr != null && scaleArr.length() >= 3) scaleArr.getDouble(2).toFloat() else 1.0f
+
+                val rotArr = node.optJSONArray("rotation")
+                val hasRot = rotArr != null && rotArr.length() >= 4
+                val qx = if (hasRot) rotArr!!.getDouble(0).toFloat() else 0f
+                val qy = if (hasRot) rotArr!!.getDouble(1).toFloat() else 0f
+                val qz = if (hasRot) rotArr!!.getDouble(2).toFloat() else 0f
+                val qw = if (hasRot) rotArr!!.getDouble(3).toFloat() else 1f
+
+                val transArr = node.optJSONArray("translation")
+                val tx = if (transArr != null && transArr.length() >= 3) transArr.getDouble(0).toFloat() else 0.0f
+                val ty = if (transArr != null && transArr.length() >= 3) transArr.getDouble(1).toFloat() else 0.0f
+                val tz = if (transArr != null && transArr.length() >= 3) transArr.getDouble(2).toFloat() else 0.0f
+
+                val r00 = 1f - 2f * (qy * qy + qz * qz)
+                val r01 = 2f * (qx * qy - qz * qw)
+                val r02 = 2f * (qx * qz + qy * qw)
+
+                val r10 = 2f * (qx * qy + qz * qw)
+                val r11 = 1f - 2f * (qx * qx + qz * qz)
+                val r12 = 2f * (qy * qz - qx * qw)
+
+                val r20 = 2f * (qx * qz - qy * qw)
+                val r21 = 2f * (qy * qz + qx * qw)
+                val r22 = 1f - 2f * (qx * qx + qy * qy)
+
+                return floatArrayOf(
+                    r00 * sx, r10 * sx, r20 * sx, 0f,
+                    r01 * sy, r11 * sy, r21 * sy, 0f,
+                    r02 * sz, r12 * sz, r22 * sz, 0f,
+                    tx, ty, tz, 1f
+                )
+            }
+
+            fun transformPoint(p: Vec3, m: FloatArray): Vec3 {
+                val x = m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12]
+                val y = m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13]
+                val z = m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14]
+                return Vec3(x, y, z)
+            }
+
+            fun transformDirection(d: Vec3, m: FloatArray): Vec3 {
+                val x = m[0] * d.x + m[4] * d.y + m[8] * d.z
+                val y = m[1] * d.x + m[5] * d.y + m[9] * d.z
+                val z = m[2] * d.x + m[6] * d.y + m[10] * d.z
+                val lenSq = x * x + y * y + z * z
+                return if (lenSq > 1e-6f) {
+                    val invLen = 1.0f / kotlin.math.sqrt(lenSq)
+                    Vec3(x * invLen, y * invLen, z * invLen)
+                } else {
+                    Vec3(0f, 1f, 0f)
+                }
+            }
+
+            val identityMatrix = floatArrayOf(
+                1f, 0f, 0f, 0f,
+                0f, 1f, 0f, 0f,
+                0f, 0f, 1f, 0f,
+                0f, 0f, 0f, 1f
+            )
+
+            // Map each mesh index to a list of its world matrices (in case instantiated in multiple nodes)
+            val meshWorldTransforms = mutableMapOf<Int, MutableList<FloatArray>>()
+            val nodes = root.optJSONArray("nodes")
+
+            if (nodes != null && nodes.length() > 0) {
+                val nodeCount = nodes.length()
+                val scenesArr = root.optJSONArray("scenes")
+                val activeSceneIdx = root.optInt("scene", 0)
+
+                val sceneRootNodeIndices = mutableListOf<Int>()
+                if (scenesArr != null && activeSceneIdx in 0 until scenesArr.length()) {
+                    val activeSceneObj = scenesArr.optJSONObject(activeSceneIdx)
+                    val activeNodesArr = activeSceneObj?.optJSONArray("nodes")
+                    if (activeNodesArr != null) {
+                        for (i in 0 until activeNodesArr.length()) {
+                            sceneRootNodeIndices.add(activeNodesArr.getInt(i))
+                        }
+                    }
+                }
+
+                if (sceneRootNodeIndices.isEmpty()) {
+                    val childSet = HashSet<Int>()
+                    for (n in 0 until nodeCount) {
+                        val node = nodes.optJSONObject(n) ?: continue
+                        val childrenArr = node.optJSONArray("children")
+                        if (childrenArr != null) {
+                            for (c in 0 until childrenArr.length()) {
+                                childSet.add(childrenArr.getInt(c))
+                            }
+                        }
+                    }
+                    for (n in 0 until nodeCount) {
+                        if (!childSet.contains(n)) {
+                            sceneRootNodeIndices.add(n)
+                        }
+                    }
+                }
+
+                val visitedNodes = HashSet<Int>()
+                fun traverseNodeHierarchy(nodeIdx: Int, parentWorldMatrix: FloatArray, depth: Int = 0) {
+                    if (depth > 64 || nodeIdx !in 0 until nodeCount) return
+                    if (!visitedNodes.add(nodeIdx)) return
+                    val node = nodes.optJSONObject(nodeIdx) ?: return
+                    val localMat = getNodeLocalMatrix(node)
+                    val worldMat = multiply4x4(parentWorldMatrix, localMat)
+
+                    val meshIdx = node.optInt("mesh", -1)
+                    if (meshIdx in 0 until meshes.length()) {
+                        meshWorldTransforms.getOrPut(meshIdx) { mutableListOf() }.add(worldMat)
+                    }
+
+                    val childrenArr = node.optJSONArray("children")
+                    if (childrenArr != null) {
+                        for (c in 0 until childrenArr.length()) {
+                            traverseNodeHierarchy(childrenArr.getInt(c), worldMat, depth + 1)
+                        }
+                    }
+                }
+
+                for (rootIdx in sceneRootNodeIndices) {
+                    visitedNodes.clear()
+                    traverseNodeHierarchy(rootIdx, identityMatrix, 0)
+                }
+            }
+
             for (m in 0 until meshes.length()) {
                 val mesh = meshes.getJSONObject(m)
                 val primitives = mesh.optJSONArray("primitives") ?: continue
+                val worldTransformsForMesh = meshWorldTransforms[m] ?: listOf(identityMatrix)
 
-                for (p in 0 until primitives.length()) {
-                    val prim = primitives.getJSONObject(p)
-                    val attributes = prim.optJSONObject("attributes") ?: continue
-                    if (!attributes.has("POSITION")) continue
+                for (worldMat in worldTransformsForMesh) {
+                    for (p in 0 until primitives.length()) {
+                        val prim = primitives.getJSONObject(p)
+                        val attributes = prim.optJSONObject("attributes") ?: continue
+                        if (!attributes.has("POSITION")) continue
 
-                    var pbrMat = GltfPbrMaterial()
-                    var primColor = 0L
-                    if (prim.has("material") && materials != null) {
-                        val matIdx = prim.getInt("material")
-                        if (matIdx in 0 until materials.length()) {
-                            pbrMat = gltfTextureManager.getPbrMaterial(matIdx)
-                            primColor = pbrMat.baseColorFactor
-                            if (primColor == 0L) primColor = pbrMat.diffuseFactor
-                            if (primColor == 0L) primColor = pbrMat.emissiveFactor
+                        val mode = prim.optInt("mode", 4) // 4 = TRIANGLES, 5 = TRIANGLE_STRIP, 6 = TRIANGLE_FAN
+
+                        var pbrMat = GltfPbrMaterial()
+                        var primColor = 0L
+                        if (prim.has("material") && materials != null) {
+                            val matIdx = prim.getInt("material")
+                            if (matIdx in 0 until materials.length()) {
+                                pbrMat = gltfTextureManager.getPbrMaterial(matIdx)
+                                primColor = pbrMat.baseColorFactor
+                                if (primColor == 0L) primColor = pbrMat.diffuseFactor
+                                if (primColor == 0L) primColor = pbrMat.emissiveFactor
+                            }
                         }
-                    }
 
-                    val posAccessorIdx = attributes.getInt("POSITION")
-                    val posAccessor = accessors.getJSONObject(posAccessorIdx)
-                    val posBufferViewIdx = posAccessor.getInt("bufferView")
-                    val posBufferView = bufferViews.getJSONObject(posBufferViewIdx)
+                        val posAccessorIdx = attributes.getInt("POSITION")
+                        val posAccessor = accessors.getJSONObject(posAccessorIdx)
+                        val posBufferViewIdx = posAccessor.getInt("bufferView")
+                        val posBufferView = bufferViews.getJSONObject(posBufferViewIdx)
 
-                    val posBufferIdx = posBufferView.optInt("buffer", 0)
-                    val rawBuffer = buffersList.getOrNull(posBufferIdx) ?: continue
+                        val posBufferIdx = posBufferView.optInt("buffer", 0)
+                        val rawBuffer = buffersList.getOrNull(posBufferIdx) ?: continue
 
-                    val posByteOffset = posBufferView.optInt("byteOffset", 0) + posAccessor.optInt("byteOffset", 0)
-                    val posCount = posAccessor.getInt("count")
+                        val posByteOffset = posBufferView.optInt("byteOffset", 0) + posAccessor.optInt("byteOffset", 0)
+                        val posCount = posAccessor.getInt("count")
 
-                    val vertices = ArrayList<Vec3>(posCount)
-                    val byteBuf = ByteBuffer.wrap(rawBuffer).order(ByteOrder.LITTLE_ENDIAN)
-                    byteBuf.position(posByteOffset)
+                        val vertices = ArrayList<Vec3>(posCount)
+                        val byteBuf = ByteBuffer.wrap(rawBuffer).order(ByteOrder.LITTLE_ENDIAN)
+                        byteBuf.position(posByteOffset)
 
-                    val byteStride = posBufferView.optInt("byteStride", 12)
-                    for (v in 0 until posCount) {
-                        val vx = byteBuf.getFloat()
-                        val vy = byteBuf.getFloat()
-                        val vz = byteBuf.getFloat()
-                        vertices.add(Vec3(vx, vy, vz))
+                        val byteStride = posBufferView.optInt("byteStride", 12)
+                        for (v in 0 until posCount) {
+                            val vx = byteBuf.getFloat()
+                            val vy = byteBuf.getFloat()
+                            val vz = byteBuf.getFloat()
+                            val transformedV = transformPoint(Vec3(vx, vy, vz), worldMat)
+                            vertices.add(transformedV)
 
-                        val skip = byteStride - 12
-                        if (skip > 0 && byteBuf.remaining() >= skip) {
-                            byteBuf.position(byteBuf.position() + skip)
+                            val skip = byteStride - 12
+                            if (skip > 0 && byteBuf.remaining() >= skip) {
+                                byteBuf.position(byteBuf.position() + skip)
+                            }
                         }
-                    }
 
-                    val uvs = ArrayList<Pair<Float, Float>>()
-                    if (attributes.has("TEXCOORD_0")) {
-                        try {
-                            val uvAccessorIdx = attributes.getInt("TEXCOORD_0")
-                            val uvAccessor = accessors.getJSONObject(uvAccessorIdx)
-                            val uvBufferViewIdx = uvAccessor.getInt("bufferView")
-                            val uvBufferView = bufferViews.getJSONObject(uvBufferViewIdx)
-                            val uvBufferIdx = uvBufferView.optInt("buffer", 0)
-                            val uvRawBuf = buffersList.getOrNull(uvBufferIdx) ?: rawBuffer
-                            val uvByteOffset = uvBufferView.optInt("byteOffset", 0) + uvAccessor.optInt("byteOffset", 0)
-                            val uvCount = uvAccessor.getInt("count")
-                            val uvComp = uvAccessor.optInt("componentType", 5126)
-                            val uvStride = uvBufferView.optInt("byteStride", 8)
+                        val uvs = ArrayList<Pair<Float, Float>>()
+                        if (attributes.has("TEXCOORD_0") || attributes.has("TEXCOORD_1")) {
+                            try {
+                                val uvKey = if (attributes.has("TEXCOORD_0")) "TEXCOORD_0" else "TEXCOORD_1"
+                                val uvAccessorIdx = attributes.getInt(uvKey)
+                                val uvAccessor = accessors.getJSONObject(uvAccessorIdx)
+                                val uvBufferViewIdx = uvAccessor.getInt("bufferView")
+                                val uvBufferView = bufferViews.getJSONObject(uvBufferViewIdx)
+                                val uvBufferIdx = uvBufferView.optInt("buffer", 0)
+                                val uvRawBuf = buffersList.getOrNull(uvBufferIdx) ?: rawBuffer
+                                val uvByteOffset = uvBufferView.optInt("byteOffset", 0) + uvAccessor.optInt("byteOffset", 0)
+                                val uvCount = uvAccessor.getInt("count")
+                                val uvComp = uvAccessor.optInt("componentType", 5126)
+                                val uvStride = uvBufferView.optInt("byteStride", if (uvComp == 5126) 8 else if (uvComp == 5123) 4 else 2)
 
-                            val uvBuf = ByteBuffer.wrap(uvRawBuf).order(ByteOrder.LITTLE_ENDIAN)
-                            uvBuf.position(uvByteOffset)
+                                val uvBuf = ByteBuffer.wrap(uvRawBuf).order(ByteOrder.LITTLE_ENDIAN)
+                                uvBuf.position(uvByteOffset)
 
-                            for (u in 0 until uvCount) {
-                                val uCoord = if (uvComp == 5126) uvBuf.float else ((uvBuf.short.toInt() and 0xFFFF) / 65535f)
-                                val vCoord = if (uvComp == 5126) uvBuf.float else ((uvBuf.short.toInt() and 0xFFFF) / 65535f)
-                                uvs.add(Pair(uCoord, vCoord))
+                                for (u in 0 until uvCount) {
+                                    val uCoord = when (uvComp) {
+                                        5126 -> uvBuf.float
+                                        5123 -> (uvBuf.short.toInt() and 0xFFFF) / 65535f
+                                        5121 -> (uvBuf.get().toInt() and 0xFF) / 255f
+                                        else -> uvBuf.float
+                                    }
+                                    val vCoord = when (uvComp) {
+                                        5126 -> uvBuf.float
+                                        5123 -> (uvBuf.short.toInt() and 0xFFFF) / 65535f
+                                        5121 -> (uvBuf.get().toInt() and 0xFF) / 255f
+                                        else -> uvBuf.float
+                                    }
+                                    uvs.add(Pair(uCoord, vCoord))
 
-                                val skip = uvStride - (if (uvComp == 5126) 8 else 4)
-                                if (skip > 0 && uvBuf.remaining() >= skip) {
-                                    uvBuf.position(uvBuf.position() + skip)
+                                    val elemSize = if (uvComp == 5126) 8 else if (uvComp == 5123) 4 else 2
+                                    val skip = uvStride - elemSize
+                                    if (skip > 0 && uvBuf.remaining() >= skip) {
+                                        uvBuf.position(uvBuf.position() + skip)
+                                    }
                                 }
-                            }
-                        } catch (e: Exception) {
-                            // Safe ignore
-                        }
-                    }
-
-                    fun getSampledColor(idx: Int): Long {
-                        if (idx in uvs.indices) {
-                            val uv = uvs[idx]
-                            return pbrMat.sampleBaseOrDiffuseColor(uv.first, uv.second, primColor)
-                        }
-                        return if (primColor != 0L) primColor else pbrMat.sampleBaseOrDiffuseColor(0f, 0f, 0L)
-                    }
-
-                    // Read indices if available
-                    if (prim.has("indices")) {
-                        val idxAccessorIdx = prim.getInt("indices")
-                        val idxAccessor = accessors.getJSONObject(idxAccessorIdx)
-                        val idxBufferViewIdx = idxAccessor.getInt("bufferView")
-                        val idxBufferView = bufferViews.getJSONObject(idxBufferViewIdx)
-
-                        val idxBufferIdx = idxBufferView.optInt("buffer", 0)
-                        val idxRawBuffer = buffersList.getOrNull(idxBufferIdx) ?: rawBuffer
-
-                        val idxByteOffset = idxBufferView.optInt("byteOffset", 0) + idxAccessor.optInt("byteOffset", 0)
-                        val idxCount = idxAccessor.getInt("count")
-                        val componentType = idxAccessor.getInt("componentType")
-
-                        val idxBuf = ByteBuffer.wrap(idxRawBuffer).order(ByteOrder.LITTLE_ENDIAN)
-                        idxBuf.position(idxByteOffset)
-
-                        val indices = IntArray(idxCount)
-                        for (i in 0 until idxCount) {
-                            indices[i] = when (componentType) {
-                                5121 -> idxBuf.get().toInt() and 0xFF
-                                5123 -> idxBuf.short.toInt() and 0xFFFF
-                                5125 -> idxBuf.int
-                                else -> idxBuf.short.toInt() and 0xFFFF
+                            } catch (e: Exception) {
+                                // Safe ignore
                             }
                         }
 
-                        for (i in 0 until idxCount - 2 step 3) {
-                            val i0 = indices[i]
-                            val i1 = indices[i + 1]
-                            val i2 = indices[i + 2]
+                        fun getSampledColor(idx: Int): Long {
+                            if (idx in uvs.indices) {
+                                val uv = uvs[idx]
+                                return pbrMat.sampleBaseOrDiffuseColor(uv.first, uv.second, primColor)
+                            }
+                            return if (primColor != 0L) primColor else pbrMat.sampleBaseOrDiffuseColor(0f, 0f, 0L)
+                        }
+
+                        fun addTriangleSafe(i0: Int, i1: Int, i2: Int) {
                             if (i0 in vertices.indices && i1 in vertices.indices && i2 in vertices.indices) {
+                                if (i0 == i1 || i1 == i2 || i0 == i2) return // Skip degenerate
                                 val v1 = vertices[i0]
                                 val v2 = vertices[i1]
                                 val v3 = vertices[i2]
-                                val norm = (v2 - v1).cross(v3 - v1).normalize()
+                                val rawNorm = (v2 - v1).cross(v3 - v1)
+                                if (rawNorm.lengthSq() < 1e-8f) return // Collinear degenerate
+                                val norm = rawNorm.normalize()
                                 val triCol = getSampledColor(i0)
+                                if (triCol == 0L && pbrMat.alphaMode == "MASK") return // Alpha masked out
                                 val uv0 = uvs.getOrNull(i0) ?: Pair(0f, 0f)
                                 val uv1 = uvs.getOrNull(i1) ?: Pair(0f, 0f)
                                 val uv2 = uvs.getOrNull(i2) ?: Pair(0f, 0f)
@@ -1475,26 +1626,88 @@ object ModelFileLoader {
                                 )
                             }
                         }
-                    } else {
-                        // Non-indexed primitives
-                        for (i in 0 until vertices.size - 2 step 3) {
-                            val v1 = vertices[i]
-                            val v2 = vertices[i + 1]
-                            val v3 = vertices[i + 2]
-                            val norm = (v2 - v1).cross(v3 - v1).normalize()
-                            val triCol = getSampledColor(i)
 
-                            triangles.add(
-                                Triangle(
-                                    v1 = v1,
-                                    v2 = v2,
-                                    v3 = v3,
-                                    normal = norm,
-                                    color = triCol,
-                                    metallic = pbrMat.metallic,
-                                    roughness = pbrMat.roughness
-                                )
-                            )
+                        // Read indices if available
+                        if (prim.has("indices")) {
+                            val idxAccessorIdx = prim.getInt("indices")
+                            val idxAccessor = accessors.getJSONObject(idxAccessorIdx)
+                            val idxBufferViewIdx = idxAccessor.getInt("bufferView")
+                            val idxBufferView = bufferViews.getJSONObject(idxBufferViewIdx)
+
+                            val idxBufferIdx = idxBufferView.optInt("buffer", 0)
+                            val idxRawBuffer = buffersList.getOrNull(idxBufferIdx) ?: rawBuffer
+
+                            val idxByteOffset = idxBufferView.optInt("byteOffset", 0) + idxAccessor.optInt("byteOffset", 0)
+                            val idxCount = idxAccessor.getInt("count")
+                            val componentType = idxAccessor.getInt("componentType")
+
+                            val idxBuf = ByteBuffer.wrap(idxRawBuffer).order(ByteOrder.LITTLE_ENDIAN)
+                            idxBuf.position(idxByteOffset)
+
+                            val indices = IntArray(idxCount)
+                            for (i in 0 until idxCount) {
+                                indices[i] = when (componentType) {
+                                    5121 -> idxBuf.get().toInt() and 0xFF
+                                    5123 -> idxBuf.short.toInt() and 0xFFFF
+                                    5125 -> idxBuf.int
+                                    else -> idxBuf.short.toInt() and 0xFFFF
+                                }
+                            }
+
+                            when (mode) {
+                                4 -> { // TRIANGLES
+                                    for (i in 0 until idxCount - 2 step 3) {
+                                        addTriangleSafe(indices[i], indices[i + 1], indices[i + 2])
+                                    }
+                                }
+                                5 -> { // TRIANGLE_STRIP
+                                    for (i in 0 until idxCount - 2) {
+                                        if (i % 2 == 0) {
+                                            addTriangleSafe(indices[i], indices[i + 1], indices[i + 2])
+                                        } else {
+                                            addTriangleSafe(indices[i + 1], indices[i], indices[i + 2])
+                                        }
+                                    }
+                                }
+                                6 -> { // TRIANGLE_FAN
+                                    for (i in 1 until idxCount - 1) {
+                                        addTriangleSafe(indices[0], indices[i], indices[i + 1])
+                                    }
+                                }
+                                else -> { // Fallback TRIANGLES
+                                    for (i in 0 until idxCount - 2 step 3) {
+                                        addTriangleSafe(indices[i], indices[i + 1], indices[i + 2])
+                                    }
+                                }
+                            }
+                        } else {
+                            // Non-indexed primitives
+                            when (mode) {
+                                4 -> { // TRIANGLES
+                                    for (i in 0 until vertices.size - 2 step 3) {
+                                        addTriangleSafe(i, i + 1, i + 2)
+                                    }
+                                }
+                                5 -> { // TRIANGLE_STRIP
+                                    for (i in 0 until vertices.size - 2) {
+                                        if (i % 2 == 0) {
+                                            addTriangleSafe(i, i + 1, i + 2)
+                                        } else {
+                                            addTriangleSafe(i + 1, i, i + 2)
+                                        }
+                                    }
+                                }
+                                6 -> { // TRIANGLE_FAN
+                                    for (i in 1 until vertices.size - 1) {
+                                        addTriangleSafe(0, i, i + 1)
+                                    }
+                                }
+                                else -> {
+                                    for (i in 0 until vertices.size - 2 step 3) {
+                                        addTriangleSafe(i, i + 1, i + 2)
+                                    }
+                                }
+                            }
                         }
                     }
                 }

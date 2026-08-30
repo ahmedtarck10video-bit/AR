@@ -55,6 +55,8 @@ fun SceneviewARViewport(
                 scale = scale,
                 panX = panX,
                 panY = panY,
+                surfaceAnchor = surfaceAnchor,
+                isAnchored = isAnchored,
                 isTransparent = true,
                 modifier = Modifier.fillMaxSize()
             )
