@@ -53,6 +53,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.engine.ar.ARPlaneFilter
 import com.example.ui.components.Sceneview3DViewport
 import com.example.ui.components.SceneviewARViewport
+import com.example.ui.components.StereoARViewport
 import com.example.ui.components.StereoDualCameraPreview
 import com.example.ui.theme.GlowGreen
 import com.example.ui.theme.MixedRealityTheme
@@ -336,8 +337,8 @@ fun SpatialMainScreen(
 
             SpatialMode.MR -> {
                 // =============================================================
-                // MR (MIXED REALITY) PASSTHROUGH & SPATIAL OCCLUSION
-                // Unified ARCore Camera Passthrough + Surface Anchoring + Filament
+                // MR (MIXED REALITY) STEREO DUAL-EYE PASSTHROUGH & SPATIAL OCCLUSION
+                // Hardware-Accelerated Dual Eye Split-Screen (Left Eye + Right Eye)
                 // =============================================================
                 Box(
                     modifier = Modifier
@@ -345,7 +346,7 @@ fun SpatialMainScreen(
                         .background(Color.Black)
                 ) {
                     if (hasCameraPermission) {
-                        SceneviewARViewport(
+                        StereoARViewport(
                             model = currentModel,
                             rotX = uiState.rotX,
                             rotY = uiState.rotY,
@@ -353,8 +354,13 @@ fun SpatialMainScreen(
                             scale = uiState.scale,
                             panX = uiState.panX,
                             panY = uiState.panY,
+                            ipdMeters = uiState.ipdDistance,
                             surfaceAnchor = uiState.surfaceAnchor,
                             isAnchored = uiState.arAnchorPlaced,
+                            stereoEyeState = uiState.stereoEyeState,
+                            isDepthOcclusionEnabled = uiState.isDepthOcclusion,
+                            depthMap = uiState.depthMap,
+                            closestDepthDistanceMeters = uiState.depthFusionInfo.closestObjectDistanceMeters,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .pointerInput(Unit) {
@@ -415,7 +421,7 @@ fun SpatialMainScreen(
                                         )
                                 )
                                 Text(
-                                    text = if (uiState.arAnchorPlaced) "MR: 6DoF Passthrough Active (Anchored)" else "MR: Tap Detected Surface to Anchor",
+                                    text = if (uiState.arAnchorPlaced) "MR: Stereo Dual-Eye Active (Anchored)" else "MR: Stereo 6DoF Active (Tap to Anchor)",
                                     color = Color.White,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold

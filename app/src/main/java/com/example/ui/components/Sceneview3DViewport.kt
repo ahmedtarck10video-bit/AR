@@ -62,7 +62,6 @@ fun Sceneview3DViewport(
             SceneView(ctx).apply {
                 if (isTransparent) {
                     setZOrderMediaOverlay(true)
-                    holder.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
                 }
                 cameraNode.position = Position(0f, 0f, 3.5f)
                 sceneViewRef = this

@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.ui.components.SceneviewARViewport
+import com.example.ui.components.StereoARViewport
 import com.example.viewmodel.MRUiState
 import com.example.viewmodel.MixedRealityViewModel
 
@@ -59,45 +60,91 @@ fun ARScreen(
 
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
         if (hasCameraPermission) {
-            // Unified Hardware-Accelerated AR Mode with Google ARCore & Filament
-            SceneviewARViewport(
-                model = currentModel,
-                rotX = uiState.rotX,
-                rotY = uiState.rotY,
-                rotZ = uiState.rotZ,
-                scale = uiState.scale,
-                panX = uiState.panX,
-                panY = uiState.panY,
-                surfaceAnchor = uiState.surfaceAnchor,
-                isAnchored = uiState.arAnchorPlaced,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = { offset ->
-                                val normX = offset.x / size.width.toFloat()
-                                val normY = offset.y / size.height.toFloat()
-                                viewModel.onSurfaceTapped(normX, normY)
-                            },
-                            onDoubleTap = {
-                                viewModel.resetPosition()
-                            }
-                        )
-                    }
-                    .pointerInput(Unit) {
-                        detectTransformGestures { _, pan, zoom, rotation ->
-                            if (pan.x != 0f || pan.y != 0f) {
-                                viewModel.updatePan(pan.x, pan.y)
-                            }
-                            if (zoom != 1.0f) {
-                                viewModel.updateScale(zoom)
-                            }
-                            if (rotation != 0f) {
-                                viewModel.updateRotation(deltaX = 0f, deltaY = rotation * 0.02f)
+            if (uiState.isSideBySideVR) {
+                StereoARViewport(
+                    model = currentModel,
+                    rotX = uiState.rotX,
+                    rotY = uiState.rotY,
+                    rotZ = uiState.rotZ,
+                    scale = uiState.scale,
+                    panX = uiState.panX,
+                    panY = uiState.panY,
+                    ipdMeters = uiState.ipdDistance,
+                    surfaceAnchor = uiState.surfaceAnchor,
+                    isAnchored = uiState.arAnchorPlaced,
+                    stereoEyeState = uiState.stereoEyeState,
+                    isDepthOcclusionEnabled = uiState.isDepthOcclusion,
+                    depthMap = uiState.depthMap,
+                    closestDepthDistanceMeters = uiState.depthFusionInfo.closestObjectDistanceMeters,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = { offset ->
+                                    val normX = offset.x / size.width.toFloat()
+                                    val normY = offset.y / size.height.toFloat()
+                                    viewModel.onSurfaceTapped(normX, normY)
+                                },
+                                onDoubleTap = {
+                                    viewModel.resetPosition()
+                                }
+                            )
+                        }
+                        .pointerInput(Unit) {
+                            detectTransformGestures { _, pan, zoom, rotation ->
+                                if (pan.x != 0f || pan.y != 0f) {
+                                    viewModel.updatePan(pan.x, pan.y)
+                                }
+                                if (zoom != 1.0f) {
+                                    viewModel.updateScale(zoom)
+                                }
+                                if (rotation != 0f) {
+                                    viewModel.updateRotation(deltaX = 0f, deltaY = rotation * 0.02f)
+                                }
                             }
                         }
-                    }
-            )
+                )
+            } else {
+                // Unified Hardware-Accelerated AR Mode with Google ARCore & Filament
+                SceneviewARViewport(
+                    model = currentModel,
+                    rotX = uiState.rotX,
+                    rotY = uiState.rotY,
+                    rotZ = uiState.rotZ,
+                    scale = uiState.scale,
+                    panX = uiState.panX,
+                    panY = uiState.panY,
+                    surfaceAnchor = uiState.surfaceAnchor,
+                    isAnchored = uiState.arAnchorPlaced,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = { offset ->
+                                    val normX = offset.x / size.width.toFloat()
+                                    val normY = offset.y / size.height.toFloat()
+                                    viewModel.onSurfaceTapped(normX, normY)
+                                },
+                                onDoubleTap = {
+                                    viewModel.resetPosition()
+                                }
+                            )
+                        }
+                        .pointerInput(Unit) {
+                            detectTransformGestures { _, pan, zoom, rotation ->
+                                if (pan.x != 0f || pan.y != 0f) {
+                                    viewModel.updatePan(pan.x, pan.y)
+                                }
+                                if (zoom != 1.0f) {
+                                    viewModel.updateScale(zoom)
+                                }
+                                if (rotation != 0f) {
+                                    viewModel.updateRotation(deltaX = 0f, deltaY = rotation * 0.02f)
+                                }
+                            }
+                        }
+                )
+            }
 
             // Floating HUD Overlay for AR Tracking & Hit Status
             Box(
