@@ -39,6 +39,49 @@ fun ARSuiteBottomSheet(
     var selectedTab by remember { mutableIntStateOf(0) }
     var cloudIdInput by remember { mutableStateOf("") }
 
+    LaunchedEffect(selectedTab) {
+        when (selectedTab) {
+            0 -> {
+                viewModel.setGeospatialProcessing(true)
+                viewModel.setStreetscapeProcessing(true)
+                viewModel.setSemanticsProcessing(false)
+                viewModel.setDepthProcessing(false)
+                viewModel.setAugmentedImagesProcessing(false)
+            }
+            1 -> {
+                viewModel.setGeospatialProcessing(false)
+                viewModel.setStreetscapeProcessing(false)
+                viewModel.setSemanticsProcessing(true)
+                viewModel.setDepthProcessing(true)
+                viewModel.setAugmentedImagesProcessing(false)
+            }
+            2 -> {
+                viewModel.setGeospatialProcessing(false)
+                viewModel.setStreetscapeProcessing(false)
+                viewModel.setSemanticsProcessing(false)
+                viewModel.setDepthProcessing(false)
+                viewModel.setAugmentedImagesProcessing(true)
+            }
+            else -> {
+                viewModel.setGeospatialProcessing(false)
+                viewModel.setStreetscapeProcessing(false)
+                viewModel.setSemanticsProcessing(false)
+                viewModel.setDepthProcessing(false)
+                viewModel.setAugmentedImagesProcessing(false)
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            viewModel.setGeospatialProcessing(false)
+            viewModel.setStreetscapeProcessing(false)
+            viewModel.setSemanticsProcessing(false)
+            viewModel.setDepthProcessing(false)
+            viewModel.setAugmentedImagesProcessing(false)
+        }
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF131822),

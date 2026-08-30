@@ -254,7 +254,7 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
                     val dP = kotlin.math.abs(orientation.pitch - lastEmittedPitch)
                     val dR = kotlin.math.abs(orientation.roll - lastEmittedRoll)
                     val dY = kotlin.math.abs(orientation.yaw - lastEmittedYaw)
-                    if (dP > 0.005f || dR > 0.005f || dY > 0.005f) {
+                    if (dP > 0.015f || dR > 0.015f || dY > 0.015f) {
                         lastEmittedPitch = orientation.pitch
                         lastEmittedRoll = orientation.roll
                         lastEmittedYaw = orientation.yaw
@@ -263,7 +263,6 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
                             sensorOrientation = orientation
                         )
                     }
-                    arCoreManager.updateFrame(orientation.pitch, orientation.roll, orientation.yaw)
                 }
             }
         }
@@ -385,12 +384,22 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
 
     fun setMode(mode: SpatialMode) {
         _uiState.value = _uiState.value.copy(currentMode = mode)
-        if (mode == SpatialMode.AR || mode == SpatialMode.MR) {
-            sensorTracker.start()
-            arCoreManager.start()
-        } else {
-            sensorTracker.stop()
-            arCoreManager.pause()
+        when (mode) {
+            SpatialMode.AR -> {
+                sensorTracker.start()
+                arCoreManager.isStereoPipelineActive = false
+                arCoreManager.start()
+            }
+            SpatialMode.MR -> {
+                sensorTracker.start()
+                arCoreManager.isStereoPipelineActive = true
+                arCoreManager.start()
+            }
+            SpatialMode.OBJECT -> {
+                sensorTracker.stop()
+                arCoreManager.isStereoPipelineActive = false
+                arCoreManager.pause()
+            }
         }
     }
 
@@ -557,8 +566,31 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun togglePointCloud() {
-        _uiState.value = _uiState.value.copy(isPointCloudVisible = !_uiState.value.isPointCloudVisible)
-        showNotification(if (_uiState.value.isPointCloudVisible) "Point Cloud: Visible" else "Point Cloud: Hidden")
+        val next = !_uiState.value.isPointCloudVisible
+        _uiState.value = _uiState.value.copy(isPointCloudVisible = next)
+        arCoreManager.isPointCloudProcessingEnabled = next
+        showNotification(if (next) "Point Cloud: Visible" else "Point Cloud: Hidden")
+    }
+
+    fun setDepthProcessing(enabled: Boolean) {
+        arCoreManager.isDepthProcessingEnabled = enabled
+        _uiState.value = _uiState.value.copy(isDepthOcclusion = enabled)
+    }
+
+    fun setSemanticsProcessing(enabled: Boolean) {
+        arCoreManager.isSemanticsProcessingEnabled = enabled
+    }
+
+    fun setGeospatialProcessing(enabled: Boolean) {
+        arCoreManager.isGeospatialProcessingEnabled = enabled
+    }
+
+    fun setStreetscapeProcessing(enabled: Boolean) {
+        arCoreManager.isStreetscapeProcessingEnabled = enabled
+    }
+
+    fun setAugmentedImagesProcessing(enabled: Boolean) {
+        arCoreManager.isAugmentedImagesProcessingEnabled = enabled
     }
 
     fun setPlaneFilter(filter: ARPlaneFilter) {

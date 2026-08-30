@@ -62,17 +62,8 @@ fun SceneviewARViewport(
 
     val isArCoreInstalled = remember {
         try {
-            val pInfo = try {
-                context.packageManager.getPackageInfo("com.google.ar.core", 0)
-            } catch (e: Exception) {
-                null
-            }
-            if (pInfo != null) {
-                val availability = ArCoreApk.getInstance().checkAvailability(context)
-                availability == ArCoreApk.Availability.SUPPORTED_INSTALLED
-            } else {
-                false
-            }
+            val availability = ArCoreApk.getInstance().checkAvailability(context)
+            availability == ArCoreApk.Availability.SUPPORTED_INSTALLED
         } catch (e: Throwable) {
             false
         }

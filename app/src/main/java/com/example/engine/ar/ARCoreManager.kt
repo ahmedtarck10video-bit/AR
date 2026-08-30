@@ -142,6 +142,25 @@ class ARCoreManager(private val context: Context) {
     private var fallbackTimeSec = 0f
     private var isFaceTrackingMode: Boolean = false
 
+    // Modular on-demand feature activation flags (Normal AR runs with minimal CPU/GPU footprint)
+    var isDepthProcessingEnabled: Boolean = false
+    var isPointCloudProcessingEnabled: Boolean = false
+    var isSemanticsProcessingEnabled: Boolean = false
+    var isStreetscapeProcessingEnabled: Boolean = false
+    var isGeospatialProcessingEnabled: Boolean = false
+    var isAugmentedImagesProcessingEnabled: Boolean = false
+    var isStereoPipelineActive: Boolean = false
+
+    // Frame throttle timestamps (eliminate 60Hz busy looping on heavy buffers)
+    private var frameIndex: Long = 0L
+    private var lastSemanticsTimeMs: Long = 0L
+    private var lastDepthTimeMs: Long = 0L
+    private var lastStreetscapeTimeMs: Long = 0L
+    private var lastPointCloudTimeMs: Long = 0L
+    private var lastGeospatialTimeMs: Long = 0L
+    private var lastImagesTimeMs: Long = 0L
+    private var lastPlaneCount: Int = -1
+
     fun setIpdDistance(ipd: Float) {
         configuredIpdMeters = ipd.coerceIn(0.040f, 0.090f)
     }
@@ -288,62 +307,82 @@ class ARCoreManager(private val context: Context) {
         var streetscapeSup = false
         var imagesSup = false
         var instantSup = false
+        var availabilityStatusMsg = "Checking ARCore..."
 
-        val isPackageInstalled = try {
-            context.packageManager.getPackageInfo("com.google.ar.core", 0) != null
-        } catch (e: PackageManager.NameNotFoundException) {
-            false
-        } catch (e: Exception) {
-            Log.w(TAG, "Package manager check failed", e)
-            false
-        }
+        try {
+            val availability = ArCoreApk.getInstance().checkAvailability(context)
+            when (availability) {
+                ArCoreApk.Availability.SUPPORTED_INSTALLED -> {
+                    isInstalled = true
+                    isARCoreAvailable = true
+                    availabilityStatusMsg = "ARCore 1.47+ Ready"
+                }
+                ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD,
+                ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED -> {
+                    isInstalled = false
+                    isARCoreAvailable = false
+                    availabilityStatusMsg = "ARCore installation or update required"
+                }
+                ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE -> {
+                    isInstalled = false
+                    isARCoreAvailable = false
+                    availabilityStatusMsg = "Device not capable of hardware ARCore"
+                }
+                ArCoreApk.Availability.UNKNOWN_CHECKING -> {
+                    isInstalled = false
+                    isARCoreAvailable = false
+                    availabilityStatusMsg = "ARCore availability checking..."
+                }
+                ArCoreApk.Availability.UNKNOWN_ERROR,
+                ArCoreApk.Availability.UNKNOWN_TIMED_OUT -> {
+                    isInstalled = false
+                    isARCoreAvailable = false
+                    availabilityStatusMsg = "ARCore availability check timed out"
+                }
+                else -> {
+                    isInstalled = false
+                    isARCoreAvailable = false
+                    availabilityStatusMsg = "ARCore Unavailable"
+                }
+            }
 
-        if (isPackageInstalled) {
-            try {
-                val availability = ArCoreApk.getInstance().checkAvailability(context)
-                isInstalled = (availability == ArCoreApk.Availability.SUPPORTED_INSTALLED)
-                isARCoreAvailable = isInstalled
-
-                if (isInstalled && ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                    var probeSession: Session? = null
+            if (isInstalled && ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                var probeSession: Session? = null
+                try {
+                    probeSession = Session(context)
+                    depthSup = probeSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
+                    rawDepthSup = probeSession.isDepthModeSupported(Config.DepthMode.RAW_DEPTH_ONLY)
+                    geoSup = probeSession.isGeospatialModeSupported(Config.GeospatialMode.ENABLED)
+                    semSup = probeSession.isSemanticModeSupported(Config.SemanticMode.ENABLED)
+                    facesSup = true
+                    cloudSup = true
+                    streetscapeSup = geoSup
+                    imagesSup = true
+                    instantSup = true
+                } catch (e: Exception) {
+                    Log.w(TAG, "Capability probe session failed: ${e.localizedMessage}", e)
+                    depthSup = false
+                    rawDepthSup = false
+                    geoSup = false
+                    semSup = false
+                    facesSup = false
+                    cloudSup = false
+                    streetscapeSup = false
+                    imagesSup = false
+                    instantSup = false
+                } finally {
                     try {
-                        probeSession = Session(context)
-                        depthSup = probeSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
-                        rawDepthSup = probeSession.isDepthModeSupported(Config.DepthMode.RAW_DEPTH_ONLY)
-                        geoSup = probeSession.isGeospatialModeSupported(Config.GeospatialMode.ENABLED)
-                        semSup = probeSession.isSemanticModeSupported(Config.SemanticMode.ENABLED)
-                        facesSup = true
-                        cloudSup = true
-                        streetscapeSup = geoSup
-                        imagesSup = true
-                        instantSup = true
+                        probeSession?.close()
                     } catch (e: Exception) {
-                        Log.w(TAG, "Capability probe session failed: ${e.localizedMessage}", e)
-                        depthSup = false
-                        rawDepthSup = false
-                        geoSup = false
-                        semSup = false
-                        facesSup = false
-                        cloudSup = false
-                        streetscapeSup = false
-                        imagesSup = false
-                        instantSup = false
-                    } finally {
-                        try {
-                            probeSession?.close()
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Error closing probe session", e)
-                        }
+                        Log.w(TAG, "Error closing probe session", e)
                     }
                 }
-            } catch (t: Throwable) {
-                Log.e(TAG, "ARCore availability query failed", t)
-                isInstalled = false
-                isARCoreAvailable = false
             }
-        } else {
+        } catch (t: Throwable) {
+            Log.e(TAG, "ARCore availability query failed", t)
             isInstalled = false
             isARCoreAvailable = false
+            availabilityStatusMsg = "ARCore query error: ${t.localizedMessage ?: "Unknown"}"
         }
 
         _capabilities.value = ARCoreCapabilities(
@@ -357,9 +396,9 @@ class ARCoreManager(private val context: Context) {
             isAugmentedImagesSupported = imagesSup,
             isInstantPlacementSupported = instantSup,
             isStreetscapeSupported = streetscapeSup,
-            summary = if (isInstalled) "ARCore 1.47+ Capabilities Runtime Verified" else "ARCore Not Installed / Unavailable"
+            summary = if (isInstalled) "ARCore 1.47+ Capabilities Runtime Verified" else availabilityStatusMsg
         )
-        _trackingStatus.value = if (isInstalled) "ARCore 1.47 Ready" else "ARCore Unavailable"
+        _trackingStatus.value = availabilityStatusMsg
     }
 
     // =========================================================================
@@ -387,16 +426,21 @@ class ARCoreManager(private val context: Context) {
             return
         }
 
-        val isPackageInstalled = try {
-            context.packageManager.getPackageInfo("com.google.ar.core", 0) != null
+        val availability = try {
+            ArCoreApk.getInstance().checkAvailability(context)
         } catch (e: Exception) {
-            false
+            ArCoreApk.Availability.UNKNOWN_ERROR
         }
 
-        if (!isPackageInstalled) {
+        if (availability != ArCoreApk.Availability.SUPPORTED_INSTALLED) {
             isARCoreAvailable = false
             isSessionRunning = false
-            _trackingStatus.value = "Google Play Services for AR not installed"
+            _trackingStatus.value = when (availability) {
+                ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE -> "Device not compatible with ARCore"
+                ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD,
+                ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED -> "Google Play Services for AR required"
+                else -> "ARCore unavailable"
+            }
             _trackingQuality.value = ARTrackingStateQuality.PAUSED_OR_LOST
             return
         }
@@ -622,12 +666,13 @@ class ARCoreManager(private val context: Context) {
     private fun processARCoreFrame(frame: Frame) {
         val currentSession = session ?: return
         val camera = frame.camera
+        val nowMs = System.currentTimeMillis()
+        frameIndex++
 
-        // A. Tracking State Quality Monitor
-        when (camera.trackingState) {
+        // A. Tracking State Quality Monitor (Only emit if quality changed to avoid recomposition)
+        val newQuality = when (camera.trackingState) {
             TrackingState.TRACKING -> {
-                val failureReason = camera.trackingFailureReason
-                _trackingQuality.value = when (failureReason) {
+                when (camera.trackingFailureReason) {
                     TrackingFailureReason.NONE -> ARTrackingStateQuality.EXCELLENT
                     TrackingFailureReason.BAD_STATE -> ARTrackingStateQuality.PAUSED_OR_LOST
                     TrackingFailureReason.INSUFFICIENT_LIGHT -> ARTrackingStateQuality.LOW_LIGHT
@@ -637,106 +682,130 @@ class ARCoreManager(private val context: Context) {
                     else -> ARTrackingStateQuality.GOOD
                 }
             }
-            TrackingState.PAUSED -> _trackingQuality.value = ARTrackingStateQuality.PAUSED_OR_LOST
-            TrackingState.STOPPED -> _trackingQuality.value = ARTrackingStateQuality.INITIALIZING
+            TrackingState.PAUSED -> ARTrackingStateQuality.PAUSED_OR_LOST
+            TrackingState.STOPPED -> ARTrackingStateQuality.INITIALIZING
+        }
+        if (_trackingQuality.value != newQuality) {
+            _trackingQuality.value = newQuality
         }
 
-        // 1. Process Physical Planes & 3D Boundaries
+        // 1. Process Physical Planes & 3D Boundaries (Throttled list creation: every 3 frames or when count changes)
         val allPlanes = currentSession.getAllTrackables(Plane::class.java)
-        val planeList = mutableListOf<ARTrackedPlane>()
-        for (plane in allPlanes) {
-            if (plane.trackingState == TrackingState.TRACKING && plane.subsumedBy == null) {
-                val centerPose = plane.centerPose
-                val centerVec = Vec3(centerPose.tx(), centerPose.ty(), centerPose.tz())
-                val normalVec = when (plane.type) {
-                    Plane.Type.HORIZONTAL_UPWARD_FACING -> Vec3(0f, 1f, 0f)
-                    Plane.Type.HORIZONTAL_DOWNWARD_FACING -> Vec3(0f, -1f, 0f)
-                    Plane.Type.VERTICAL -> {
-                        val zAxis = centerPose.zAxis
-                        Vec3(zAxis[0], zAxis[1], zAxis[2])
-                    }
-                }
-                val orientation = when (plane.type) {
-                    Plane.Type.HORIZONTAL_UPWARD_FACING -> PlaneOrientation.HORIZONTAL_UPWARD
-                    Plane.Type.HORIZONTAL_DOWNWARD_FACING -> PlaneOrientation.HORIZONTAL_DOWNWARD
-                    Plane.Type.VERTICAL -> PlaneOrientation.VERTICAL
-                }
-
-                val polygon2d = plane.polygon
-                val polygon3d = mutableListOf<Vec3>()
-                val count = polygon2d.remaining() / 2
-                for (i in 0 until count) {
-                    val px = polygon2d.get(i * 2)
-                    val pz = polygon2d.get(i * 2 + 1)
-                    val localPointPose = centerPose.compose(Pose.makeTranslation(px, 0f, pz))
-                    polygon3d.add(Vec3(localPointPose.tx(), localPointPose.ty(), localPointPose.tz()))
-                }
-
-                planeList.add(
-                    ARTrackedPlane(
-                        id = getStablePlaneId(plane),
-                        center = centerVec,
-                        normal = normalVec,
-                        extentX = plane.extentX,
-                        extentZ = plane.extentZ,
-                        polygon = if (polygon3d.isNotEmpty()) polygon3d else createDefaultPolygon(centerVec, plane.extentX, plane.extentZ),
-                        orientation = orientation
-                    )
-                )
+        var trackingPlaneCount = 0
+        for (p in allPlanes) {
+            if (p.trackingState == TrackingState.TRACKING && p.subsumedBy == null) {
+                trackingPlaneCount++
             }
         }
-        _trackedPlanes.value = planeList
 
-        // 2. Process Augmented Images (Single Managed Anchor Per Tracked Image)
-        try {
-            val allImages = currentSession.getAllTrackables(AugmentedImage::class.java)
-            val imageList = mutableListOf<ARTrackedImage>()
-            val activeIndices = mutableSetOf<Int>()
-            for (image in allImages) {
-                activeIndices.add(image.index)
-                val isTracking = (image.trackingState == TrackingState.TRACKING)
-                val methodStr = if (image.trackingMethod == AugmentedImage.TrackingMethod.FULL_TRACKING) "FULL_TRACKING" else "LAST_KNOWN_POSE"
-                val pose = image.centerPose
-
-                val anchor = if (isTracking && image.trackingMethod == AugmentedImage.TrackingMethod.FULL_TRACKING) {
-                    managedImageAnchors.getOrPut(image.index) {
-                        registerAnchor(image.createAnchor(pose))
+        if (trackingPlaneCount != lastPlaneCount || (frameIndex % 4L == 0L)) {
+            lastPlaneCount = trackingPlaneCount
+            val planeList = ArrayList<ARTrackedPlane>(trackingPlaneCount)
+            for (plane in allPlanes) {
+                if (plane.trackingState == TrackingState.TRACKING && plane.subsumedBy == null) {
+                    val centerPose = plane.centerPose
+                    val centerVec = Vec3(centerPose.tx(), centerPose.ty(), centerPose.tz())
+                    val normalVec = when (plane.type) {
+                        Plane.Type.HORIZONTAL_UPWARD_FACING -> Vec3(0f, 1f, 0f)
+                        Plane.Type.HORIZONTAL_DOWNWARD_FACING -> Vec3(0f, -1f, 0f)
+                        Plane.Type.VERTICAL -> {
+                            val zAxis = centerPose.zAxis
+                            Vec3(zAxis[0], zAxis[1], zAxis[2])
+                        }
                     }
-                } else {
-                    if (image.trackingState == TrackingState.STOPPED) {
-                        val deadAnchor = managedImageAnchors.remove(image.index)
-                        detachAnchor(deadAnchor)
-                        null
+                    val orientation = when (plane.type) {
+                        Plane.Type.HORIZONTAL_UPWARD_FACING -> PlaneOrientation.HORIZONTAL_UPWARD
+                        Plane.Type.HORIZONTAL_DOWNWARD_FACING -> PlaneOrientation.HORIZONTAL_DOWNWARD
+                        Plane.Type.VERTICAL -> PlaneOrientation.VERTICAL
+                    }
+
+                    val polygon2d = plane.polygon
+                    val polygon3d = ArrayList<Vec3>()
+                    val count = polygon2d.remaining() / 2
+                    for (i in 0 until count) {
+                        val px = polygon2d.get(i * 2)
+                        val pz = polygon2d.get(i * 2 + 1)
+                        val localPointPose = centerPose.compose(Pose.makeTranslation(px, 0f, pz))
+                        polygon3d.add(Vec3(localPointPose.tx(), localPointPose.ty(), localPointPose.tz()))
+                    }
+
+                    planeList.add(
+                        ARTrackedPlane(
+                            id = getStablePlaneId(plane),
+                            center = centerVec,
+                            normal = normalVec,
+                            extentX = plane.extentX,
+                            extentZ = plane.extentZ,
+                            polygon = if (polygon3d.isNotEmpty()) polygon3d else createDefaultPolygon(centerVec, plane.extentX, plane.extentZ),
+                            orientation = orientation
+                        )
+                    )
+                }
+            }
+            _trackedPlanes.value = planeList
+
+            val statusText = if (trackingPlaneCount > 0) {
+                "ARCore Tracking $trackingPlaneCount Physical Surface${if (trackingPlaneCount > 1) "s" else ""}"
+            } else {
+                "AR Spatial Scanner Ready"
+            }
+            if (_trackingStatus.value != statusText) {
+                _trackingStatus.value = statusText
+            }
+        }
+
+        // 2. Process Augmented Images (On-Demand & Throttled to 200ms)
+        if (isAugmentedImagesProcessingEnabled && (nowMs - lastImagesTimeMs >= 200)) {
+            lastImagesTimeMs = nowMs
+            try {
+                val allImages = currentSession.getAllTrackables(AugmentedImage::class.java)
+                val imageList = mutableListOf<ARTrackedImage>()
+                val activeIndices = mutableSetOf<Int>()
+                for (image in allImages) {
+                    activeIndices.add(image.index)
+                    val isTracking = (image.trackingState == TrackingState.TRACKING)
+                    val methodStr = if (image.trackingMethod == AugmentedImage.TrackingMethod.FULL_TRACKING) "FULL_TRACKING" else "LAST_KNOWN_POSE"
+                    val pose = image.centerPose
+
+                    val anchor = if (isTracking && image.trackingMethod == AugmentedImage.TrackingMethod.FULL_TRACKING) {
+                        managedImageAnchors.getOrPut(image.index) {
+                            registerAnchor(image.createAnchor(pose))
+                        }
                     } else {
-                        managedImageAnchors[image.index]
+                        if (image.trackingState == TrackingState.STOPPED) {
+                            val deadAnchor = managedImageAnchors.remove(image.index)
+                            detachAnchor(deadAnchor)
+                            null
+                        } else {
+                            managedImageAnchors[image.index]
+                        }
                     }
-                }
 
-                imageList.add(
-                    ARTrackedImage(
-                        id = "image_target_${image.index}_${image.name ?: "target"}",
-                        name = image.name ?: "Target_${image.index}",
-                        center = Vec3(pose.tx(), pose.ty(), pose.tz()),
-                        extentX = image.extentX,
-                        extentZ = image.extentZ,
-                        isTracking = isTracking,
-                        trackingMethod = methodStr,
-                        anchor = anchor
+                    imageList.add(
+                        ARTrackedImage(
+                            id = "image_target_${image.index}_${image.name ?: "target"}",
+                            name = image.name ?: "Target_${image.index}",
+                            center = Vec3(pose.tx(), pose.ty(), pose.tz()),
+                            extentX = image.extentX,
+                            extentZ = image.extentZ,
+                            isTracking = isTracking,
+                            trackingMethod = methodStr,
+                            anchor = anchor
+                        )
                     )
-                )
+                }
+                val staleIndices = managedImageAnchors.keys - activeIndices
+                for (stale in staleIndices) {
+                    val deadAnchor = managedImageAnchors.remove(stale)
+                    detachAnchor(deadAnchor)
+                }
+                _trackedImages.value = imageList
+            } catch (e: Exception) {
+                Log.w(TAG, "Error processing tracked images", e)
             }
-            // Cleanup anchors for removed images
-            val staleIndices = managedImageAnchors.keys - activeIndices
-            for (stale in staleIndices) {
-                val deadAnchor = managedImageAnchors.remove(stale)
-                detachAnchor(deadAnchor)
-            }
-            _trackedImages.value = imageList
-        } catch (e: Exception) {
-            Log.w(TAG, "Error processing tracked images", e)
         }
 
-        // 3. Process Augmented Faces (468 3D Mesh Vertices & Facial Regions)
+        // 3. Process Augmented Faces (On-Demand)
         if (isFaceTrackingMode) {
             try {
                 val allFaces = currentSession.getAllTrackables(AugmentedFace::class.java)
@@ -761,7 +830,6 @@ class ARCoreManager(private val context: Context) {
                         meshPoints.add(Vec3(worldPose.tx(), worldPose.ty(), worldPose.tz()))
                     }
 
-                    // Compute true eye openness metrics from 468 3D landmarks (never use constant placeholders)
                     val (leftEyeRatio, rightEyeRatio, hasEyeMetrics) = if (totalVerts >= 400) {
                         try {
                             fun getV(idx: Int): Vec3 {
@@ -801,288 +869,290 @@ class ARCoreManager(private val context: Context) {
                         isEyeMetricsAvailable = hasEyeMetrics
                     )
                 } else {
-                    _faceMeshTracking.value = _faceMeshTracking.value.copy(isTracking = false)
+                    if (_faceMeshTracking.value.isTracking) {
+                        _faceMeshTracking.value = _faceMeshTracking.value.copy(isTracking = false)
+                    }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Error processing augmented faces", e)
             }
         }
 
-        // 4. Process Geospatial Earth State & True VPS Validation
-        try {
-            val earth = currentSession.earth
-            if (earth != null && earth.earthState == Earth.EarthState.ENABLED) {
-                if (earth.trackingState == TrackingState.TRACKING) {
-                    val geoPose = earth.cameraGeospatialPose
-                    val hAcc = geoPose.horizontalAccuracy.toFloat()
-                    val vAcc = geoPose.verticalAccuracy.toFloat()
-                    val headAcc = geoPose.headingAccuracy.toFloat()
-                    val validation = validateGeospatialAccuracy()
-                    val isAccurate = validation is GeospatialValidationResult.Valid
+        // 4. Process Geospatial Earth State & True VPS Validation (On-Demand & Throttled to 250ms)
+        if (isGeospatialProcessingEnabled && (nowMs - lastGeospatialTimeMs >= 250)) {
+            lastGeospatialTimeMs = nowMs
+            try {
+                val earth = currentSession.earth
+                if (earth != null && earth.earthState == Earth.EarthState.ENABLED) {
+                    if (earth.trackingState == TrackingState.TRACKING) {
+                        val geoPose = earth.cameraGeospatialPose
+                        val hAcc = geoPose.horizontalAccuracy.toFloat()
+                        val vAcc = geoPose.verticalAccuracy.toFloat()
+                        val headAcc = geoPose.headingAccuracy.toFloat()
+                        val validation = validateGeospatialAccuracy()
+                        val isAccurate = validation is GeospatialValidationResult.Valid
 
-                    _geospatialInfo.value = ARGeospatialInfo(
-                        latitude = geoPose.latitude,
-                        longitude = geoPose.longitude,
-                        altitudeMeters = geoPose.altitude,
-                        headingDegrees = geoPose.heading,
-                        horizontalAccuracyMeters = hAcc,
-                        verticalAccuracyMeters = vAcc,
-                        headingAccuracyDegrees = headAcc,
-                        isVPSAvailable = true,
-                        isPositionAccurate = isAccurate,
-                        vpsStatus = if (isAccurate) "VPS Locked (±${String.format("%.1f", hAcc)}m)" else "VPS Refining (H:±${String.format("%.1f", hAcc)}m, Head:±${String.format("%.1f", headAcc)}°)",
-                        lastValidationResult = validation
-                    )
+                        _geospatialInfo.value = ARGeospatialInfo(
+                            latitude = geoPose.latitude,
+                            longitude = geoPose.longitude,
+                            altitudeMeters = geoPose.altitude,
+                            headingDegrees = geoPose.heading,
+                            horizontalAccuracyMeters = hAcc,
+                            verticalAccuracyMeters = vAcc,
+                            headingAccuracyDegrees = headAcc,
+                            isVPSAvailable = true,
+                            isPositionAccurate = isAccurate,
+                            vpsStatus = if (isAccurate) "VPS Locked (±${String.format("%.1f", hAcc)}m)" else "VPS Refining (H:±${String.format("%.1f", hAcc)}m, Head:±${String.format("%.1f", headAcc)}°)",
+                            lastValidationResult = validation
+                        )
+                    } else {
+                        _geospatialInfo.value = _geospatialInfo.value.copy(
+                            isVPSAvailable = false,
+                            isPositionAccurate = false,
+                            vpsStatus = "Earth Tracking Searching...",
+                            lastValidationResult = GeospatialValidationResult.EarthNotTracking
+                        )
+                    }
                 } else {
                     _geospatialInfo.value = _geospatialInfo.value.copy(
                         isVPSAvailable = false,
                         isPositionAccurate = false,
-                        vpsStatus = "Earth Tracking Searching...",
-                        lastValidationResult = GeospatialValidationResult.EarthNotTracking
+                        vpsStatus = "Geospatial Earth Inactive",
+                        lastValidationResult = GeospatialValidationResult.ServiceUnavailable
                     )
                 }
-            } else {
-                _geospatialInfo.value = _geospatialInfo.value.copy(
-                    isVPSAvailable = false,
-                    isPositionAccurate = false,
-                    vpsStatus = "Geospatial Earth Inactive",
-                    lastValidationResult = GeospatialValidationResult.ServiceUnavailable
-                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Error querying Geospatial Earth pose", e)
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error querying Geospatial Earth pose", e)
         }
 
-        // 5. Process Streetscape Geometry Meshes with Stable IDs
-        try {
-            val geometries = currentSession.getAllTrackables(StreetscapeGeometry::class.java)
-            val meshList = mutableListOf<ARStreetscapeMesh>()
-            for (geom in geometries) {
-                if (geom.trackingState == TrackingState.TRACKING) {
-                    val pose = try {
-                        val getPoseMethod = geom.javaClass.getMethod("getCenterPose")
-                        getPoseMethod.invoke(geom) as? Pose
-                    } catch (e: Exception) {
+        // 5. Process Streetscape Geometry Meshes with Stable IDs (On-Demand & Throttled to 400ms)
+        if (isStreetscapeProcessingEnabled && (nowMs - lastStreetscapeTimeMs >= 400)) {
+            lastStreetscapeTimeMs = nowMs
+            try {
+                val geometries = currentSession.getAllTrackables(StreetscapeGeometry::class.java)
+                val meshList = mutableListOf<ARStreetscapeMesh>()
+                for (geom in geometries) {
+                    if (geom.trackingState == TrackingState.TRACKING) {
+                        val pose = try {
+                            val getPoseMethod = geom.javaClass.getMethod("getCenterPose")
+                            getPoseMethod.invoke(geom) as? Pose
+                        } catch (e: Exception) {
+                            try {
+                                val getPoseMethod2 = geom.javaClass.getMethod("getPose")
+                                getPoseMethod2.invoke(geom) as? Pose
+                            } catch (e2: Exception) { null }
+                        }
+
+                        val typeStr = if (geom.type == StreetscapeGeometry.Type.BUILDING) "BUILDING" else "TERRAIN"
+                        val tx = pose?.tx() ?: 0f
+                        val ty = pose?.ty() ?: 0f
+                        val tz = pose?.tz() ?: 2.0f
+
+                        val meshVerts = mutableListOf<Vec3>()
                         try {
-                            val getPoseMethod2 = geom.javaClass.getMethod("getPose")
-                            getPoseMethod2.invoke(geom) as? Pose
-                        } catch (e2: Exception) { null }
-                    }
+                            val meshObj = geom.mesh
+                            if (meshObj != null) {
+                                val vBuffer = try {
+                                    val getV = meshObj.javaClass.getMethod("getVertices")
+                                    getV.invoke(meshObj) as? FloatBuffer
+                                } catch (e: Exception) { null }
 
-                    val typeStr = if (geom.type == StreetscapeGeometry.Type.BUILDING) "BUILDING" else "TERRAIN"
-                    val tx = pose?.tx() ?: 0f
-                    val ty = pose?.ty() ?: 0f
-                    val tz = pose?.tz() ?: 2.0f
-
-                    val meshVerts = mutableListOf<Vec3>()
-                    try {
-                        val meshObj = geom.mesh
-                        if (meshObj != null) {
-                            val vBuffer = try {
-                                val getV = meshObj.javaClass.getMethod("getVertices")
-                                getV.invoke(meshObj) as? FloatBuffer
-                            } catch (e: Exception) { null }
-
-                            if (vBuffer != null) {
-                                val vCount = vBuffer.remaining() / 3
-                                val step = max(1, vCount / 30)
-                                for (vi in 0 until vCount step step) {
-                                    val mx = vBuffer.get(vi * 3)
-                                    val my = vBuffer.get(vi * 3 + 1)
-                                    val mz = vBuffer.get(vi * 3 + 2)
-                                    val worldPose = pose?.compose(Pose.makeTranslation(mx, my, mz))
-                                    if (worldPose != null) {
-                                        meshVerts.add(Vec3(worldPose.tx(), worldPose.ty(), worldPose.tz()))
+                                if (vBuffer != null) {
+                                    val vCount = vBuffer.remaining() / 3
+                                    val step = max(1, vCount / 30)
+                                    for (vi in 0 until vCount step step) {
+                                        val mx = vBuffer.get(vi * 3)
+                                        val my = vBuffer.get(vi * 3 + 1)
+                                        val mz = vBuffer.get(vi * 3 + 2)
+                                        val worldPose = pose?.compose(Pose.makeTranslation(mx, my, mz))
+                                        if (worldPose != null) {
+                                            meshVerts.add(Vec3(worldPose.tx(), worldPose.ty(), worldPose.tz()))
+                                        }
                                     }
                                 }
                             }
+                        } catch (e: Throwable) {
+                            Log.w(TAG, "Error extracting streetscape geometry mesh vertices", e)
                         }
-                    } catch (e: Throwable) {
-                        Log.w(TAG, "Error extracting streetscape geometry mesh vertices", e)
-                    }
 
-                    meshList.add(
-                        ARStreetscapeMesh(
-                            id = getStableStreetscapeId(geom),
-                            type = typeStr,
-                            center = Vec3(tx, ty, tz),
-                            verticesCount = if (meshVerts.isNotEmpty()) meshVerts.size * 30 else 120,
-                            trianglesCount = 80,
-                            meshVertices = meshVerts,
-                            isOcclusionActive = true
+                        meshList.add(
+                            ARStreetscapeMesh(
+                                id = getStableStreetscapeId(geom),
+                                type = typeStr,
+                                center = Vec3(tx, ty, tz),
+                                verticesCount = if (meshVerts.isNotEmpty()) meshVerts.size * 30 else 120,
+                                trianglesCount = 80,
+                                meshVertices = meshVerts,
+                                isOcclusionActive = true
+                            )
                         )
-                    )
+                    }
                 }
+                _streetscapeMeshes.value = meshList
+            } catch (e: Throwable) {
+                Log.w(TAG, "Error querying Streetscape Geometries", e)
             }
-            _streetscapeMeshes.value = meshList
-        } catch (e: Throwable) {
-            Log.w(TAG, "Error querying Streetscape Geometries", e)
         }
 
-        // 6. Complete Scene Semantics Image Buffer Processing
-        processSceneSemanticsBuffer(frame)
+        // 6. Scene Semantics Image Buffer Processing (On-Demand & Throttled to 300ms)
+        if (isSemanticsProcessingEnabled && (nowMs - lastSemanticsTimeMs >= 300)) {
+            lastSemanticsTimeMs = nowMs
+            processSceneSemanticsBuffer(frame)
+        }
 
-        // 7. Complete Geospatial Depth Fusion (16-bit Depth + VPS Fusion)
-        processDepthFusion(frame)
+        // 7. Geospatial Depth Fusion (16-bit Depth) (On-Demand & Throttled to 120ms)
+        if (isDepthProcessingEnabled && (nowMs - lastDepthTimeMs >= 120)) {
+            lastDepthTimeMs = nowMs
+            processDepthFusion(frame)
+        }
 
-        // 8. Process Point Cloud with Immediate Release
-        try {
-            val pc = frame.acquirePointCloud()
+        // 8. Process Point Cloud with Immediate Release (On-Demand & Throttled to 200ms)
+        if (isPointCloudProcessingEnabled && (nowMs - lastPointCloudTimeMs >= 200)) {
+            lastPointCloudTimeMs = nowMs
             try {
-                val pointsBuffer = pc.points
-                val pointList = mutableListOf<Vec3>()
-                val numPoints = pointsBuffer.remaining() / 4
-                val step = max(1, numPoints / 60)
-                for (i in 0 until numPoints step step) {
-                    val x = pointsBuffer.get(i * 4)
-                    val y = pointsBuffer.get(i * 4 + 1)
-                    val z = pointsBuffer.get(i * 4 + 2)
-                    pointList.add(Vec3(x, y, z))
+                val pc = frame.acquirePointCloud()
+                try {
+                    val pointsBuffer = pc.points
+                    val pointList = mutableListOf<Vec3>()
+                    val numPoints = pointsBuffer.remaining() / 4
+                    val step = max(1, numPoints / 60)
+                    for (i in 0 until numPoints step step) {
+                        val x = pointsBuffer.get(i * 4)
+                        val y = pointsBuffer.get(i * 4 + 1)
+                        val z = pointsBuffer.get(i * 4 + 2)
+                        pointList.add(Vec3(x, y, z))
+                    }
+                    _pointCloud.value = pointList
+                } finally {
+                    pc.release()
                 }
-                _pointCloud.value = pointList
-            } finally {
-                pc.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error acquiring point cloud", e)
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error acquiring point cloud", e)
         }
 
-        // 9. Light estimation
-        try {
-            val lightEstimate = frame.lightEstimate
-            if (lightEstimate.state == LightEstimate.State.VALID) {
-                _lightIntensity.value = lightEstimate.pixelIntensity
+        // 9. Light estimation (Sampled every 5 frames)
+        if (frameIndex % 5L == 0L) {
+            try {
+                val lightEstimate = frame.lightEstimate
+                if (lightEstimate.state == LightEstimate.State.VALID) {
+                    _lightIntensity.value = lightEstimate.pixelIntensity
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error querying light estimate", e)
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error querying light estimate", e)
         }
 
-        // 10. Real ARCore Camera Intrinsics & Stereoscopic 6DoF Eye Metrics
-        try {
-            val intrinsics = camera.imageIntrinsics
-            val fLength = intrinsics.focalLength
-            val pPoint = intrinsics.principalPoint
-            val dims = intrinsics.imageDimensions
-            val camPose = camera.pose
-            val ipd = configuredIpdMeters.coerceIn(0.040f, 0.090f)
-            val halfIpd = ipd * 0.5f
+        // 10. Real ARCore Camera Intrinsics & Stereoscopic 6DoF Eye Metrics (Only computed in active MR Stereo mode)
+        if (isStereoPipelineActive) {
+            try {
+                val intrinsics = camera.imageIntrinsics
+                val fLength = intrinsics.focalLength
+                val pPoint = intrinsics.principalPoint
+                val dims = intrinsics.imageDimensions
+                val camPose = camera.pose
+                val ipd = configuredIpdMeters.coerceIn(0.040f, 0.090f)
+                val halfIpd = ipd * 0.5f
 
-            // Dynamic convergence distance tied to actual physical 6DoF Anchor position
-            val activeAnchor = activeAnchors.firstOrNull { it.trackingState == TrackingState.TRACKING }
-            val convergenceDist: Float = if (activeAnchor != null) {
-                val anchorPose = activeAnchor.pose
-                val dx = anchorPose.tx() - camPose.tx()
-                val dy = anchorPose.ty() - camPose.ty()
-                val dz = anchorPose.tz() - camPose.tz()
-                val dist = sqrt((dx * dx + dy * dy + dz * dz).toDouble()).toFloat()
-                if (dist > 0.2f) dist else 1.5f
-            } else {
-                1.5f
+                val activeAnchor = activeAnchors.firstOrNull { it.trackingState == TrackingState.TRACKING }
+                val convergenceDist: Float = if (activeAnchor != null) {
+                    val anchorPose = activeAnchor.pose
+                    val dx = anchorPose.tx() - camPose.tx()
+                    val dy = anchorPose.ty() - camPose.ty()
+                    val dz = anchorPose.tz() - camPose.tz()
+                    val dist = sqrt((dx * dx + dy * dy + dz * dz).toDouble()).toFloat()
+                    if (dist > 0.2f) dist else 1.5f
+                } else {
+                    1.5f
+                }
+
+                val vergenceRad = atan2(halfIpd.toDouble(), convergenceDist.toDouble())
+                val vergence: Float = (vergenceRad * 180.0 / Math.PI).toFloat()
+
+                val displayPose = try { camera.displayOrientedPose } catch (e: Exception) { camPose }
+                val leftEyePose = displayPose.compose(Pose.makeTranslation(-halfIpd, 0f, 0f))
+                val rightEyePose = displayPose.compose(Pose.makeTranslation(+halfIpd, 0f, 0f))
+
+                val leftEyeTransform = FloatArray(16)
+                val rightEyeTransform = FloatArray(16)
+                val camPoseTransform = FloatArray(16)
+                val leftViewM = FloatArray(16)
+                val rightViewM = FloatArray(16)
+                camPose.toMatrix(camPoseTransform, 0)
+                leftEyePose.toMatrix(leftEyeTransform, 0)
+                rightEyePose.toMatrix(rightEyeTransform, 0)
+                Matrix.invertM(leftViewM, 0, leftEyeTransform, 0)
+                Matrix.invertM(rightViewM, 0, rightEyeTransform, 0)
+
+                val fx: Float = if (fLength.isNotEmpty()) fLength[0] else 500f
+                val fy: Float = if (fLength.size > 1) fLength[1] else 500f
+                val cx: Float = if (pPoint.isNotEmpty()) pPoint[0] else (dims.getOrElse(0) { 1920 } / 2f)
+                val cy: Float = if (pPoint.size > 1) pPoint[1] else (dims.getOrElse(1) { 1080 } / 2f)
+
+                val arcoreBaseProj = FloatArray(16)
+                val near = 0.1f
+                val far = 100.0f
+                camera.getProjectionMatrix(arcoreBaseProj, 0, near, far)
+
+                val projScaleX = kotlin.math.abs(arcoreBaseProj[0])
+                val stereoShear = projScaleX * (halfIpd / convergenceDist)
+
+                val leftProjM = arcoreBaseProj.clone().apply {
+                    this[8] += stereoShear
+                }
+                val rightProjM = arcoreBaseProj.clone().apply {
+                    this[8] -= stereoShear
+                }
+
+                val isTracking = (camera.trackingState == TrackingState.TRACKING)
+
+                _stereoEyeState.value = ARStereoEyeState(
+                    isStereoReady = isTracking,
+                    timestampNs = frame.timestamp,
+                    focalLengthX = fx,
+                    focalLengthY = fy,
+                    principalPointX = cx,
+                    principalPointY = cy,
+                    imageWidth = dims.getOrElse(0) { 1920 },
+                    imageHeight = dims.getOrElse(1) { 1080 },
+                    ipdMeters = ipd,
+                    eyeSeparationMeters = ipd,
+                    convergenceDistanceMeters = convergenceDist,
+                    vergenceDegrees = vergence,
+                    cameraPoseTx = camPose.tx(),
+                    cameraPoseTy = camPose.ty(),
+                    cameraPoseTz = camPose.tz(),
+                    leftEyePoseTx = leftEyePose.tx(),
+                    leftEyePoseTy = leftEyePose.ty(),
+                    leftEyePoseTz = leftEyePose.tz(),
+                    rightEyePoseTx = rightEyePose.tx(),
+                    rightEyePoseTy = rightEyePose.ty(),
+                    rightEyePoseTz = rightEyePose.tz(),
+                    leftViewMatrix = leftViewM,
+                    rightViewMatrix = rightViewM,
+                    leftProjectionMatrix = leftProjM,
+                    rightProjectionMatrix = rightProjM
+                )
+
+                _frameSnapshot.value = ARFrameSnapshot(
+                    timestampNs = frame.timestamp,
+                    trackingQuality = _trackingQuality.value,
+                    cameraPoseMatrix = camPoseTransform,
+                    leftViewMatrix = leftViewM,
+                    rightViewMatrix = rightViewM,
+                    leftProjectionMatrix = leftProjM,
+                    rightProjectionMatrix = rightProjM,
+                    leftEyePose = Vec3(leftEyePose.tx(), leftEyePose.ty(), leftEyePose.tz()),
+                    rightEyePose = Vec3(rightEyePose.tx(), rightEyePose.ty(), rightEyePose.tz()),
+                    ipdMeters = ipd,
+                    vergenceDegrees = vergence,
+                    depthMap = _depthMapBuffer.value,
+                    isTracking = isTracking
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Error querying camera intrinsics for stereo", e)
             }
-
-            val vergenceRad = atan2(halfIpd.toDouble(), convergenceDist.toDouble())
-            val vergence: Float = (vergenceRad * 180.0 / Math.PI).toFloat()
-
-            // True Left/Right Eye World Poses using ARCore's display-oriented geometry
-            val displayPose = try { camera.displayOrientedPose } catch (e: Exception) { camPose }
-            val leftEyePose = displayPose.compose(Pose.makeTranslation(-halfIpd, 0f, 0f))
-            val rightEyePose = displayPose.compose(Pose.makeTranslation(+halfIpd, 0f, 0f))
-
-            // Compute 4x4 View Matrices
-            val leftEyeTransform = FloatArray(16)
-            val rightEyeTransform = FloatArray(16)
-            val camPoseTransform = FloatArray(16)
-            val leftViewM = FloatArray(16)
-            val rightViewM = FloatArray(16)
-            camPose.toMatrix(camPoseTransform, 0)
-            leftEyePose.toMatrix(leftEyeTransform, 0)
-            rightEyePose.toMatrix(rightEyeTransform, 0)
-            Matrix.invertM(leftViewM, 0, leftEyeTransform, 0)
-            Matrix.invertM(rightViewM, 0, rightEyeTransform, 0)
-
-            // Compute 4x4 Asymmetric Stereoscopic Off-Axis Projection Matrices from Intrinsics
-            val fx: Float = if (fLength.isNotEmpty()) fLength[0] else 500f
-            val fy: Float = if (fLength.size > 1) fLength[1] else 500f
-            val cx: Float = if (pPoint.isNotEmpty()) pPoint[0] else (dims.getOrElse(0) { 1920 } / 2f)
-            val cy: Float = if (pPoint.size > 1) pPoint[1] else (dims.getOrElse(1) { 1080 } / 2f)
-            val w: Float = if (dims.isNotEmpty()) dims[0].toFloat() else 1920f
-            val h: Float = if (dims.size > 1) dims[1].toFloat() else 1080f
-
-            // 1. Obtain Official ARCore Display-Oriented Projection Matrix (handles all aspect ratios & screen rotations)
-            val arcoreBaseProj = FloatArray(16)
-            val near = 0.1f
-            val far = 100.0f
-            camera.getProjectionMatrix(arcoreBaseProj, 0, near, far)
-
-            // 2. Derive Rigorous Off-Axis Asymmetric Stereo Projection for Left and Right Eyes
-            // Shear factor based on optical focal scale, IPD half-separation, and convergence distance
-            val projScaleX = kotlin.math.abs(arcoreBaseProj[0])
-            val stereoShear = projScaleX * (halfIpd / convergenceDist)
-
-            val leftProjM = arcoreBaseProj.clone().apply {
-                // Apply horizontal optical shear directly to element [8] (P[0][2] in OpenGL 4x4 column-major)
-                this[8] += stereoShear
-            }
-            val rightProjM = arcoreBaseProj.clone().apply {
-                // Apply horizontal optical shear in opposite direction for right ocular convergence
-                this[8] -= stereoShear
-            }
-
-            val isTracking = (camera.trackingState == TrackingState.TRACKING)
-
-            _stereoEyeState.value = ARStereoEyeState(
-                isStereoReady = isTracking,
-                timestampNs = frame.timestamp,
-                focalLengthX = fx,
-                focalLengthY = fy,
-                principalPointX = cx,
-                principalPointY = cy,
-                imageWidth = dims.getOrElse(0) { 1920 },
-                imageHeight = dims.getOrElse(1) { 1080 },
-                ipdMeters = ipd,
-                eyeSeparationMeters = ipd, // Full physical baseline separation
-                convergenceDistanceMeters = convergenceDist,
-                vergenceDegrees = vergence,
-                cameraPoseTx = camPose.tx(),
-                cameraPoseTy = camPose.ty(),
-                cameraPoseTz = camPose.tz(),
-                leftEyePoseTx = leftEyePose.tx(),
-                leftEyePoseTy = leftEyePose.ty(),
-                leftEyePoseTz = leftEyePose.tz(),
-                rightEyePoseTx = rightEyePose.tx(),
-                rightEyePoseTy = rightEyePose.ty(),
-                rightEyePoseTz = rightEyePose.tz(),
-                leftViewMatrix = leftViewM,
-                rightViewMatrix = rightViewM,
-                leftProjectionMatrix = leftProjM,
-                rightProjectionMatrix = rightProjM
-            )
-
-            // Atomic Synchronized Frame Snapshot across camera, depth, eyes, and tracking
-            _frameSnapshot.value = ARFrameSnapshot(
-                timestampNs = frame.timestamp,
-                trackingQuality = _trackingQuality.value,
-                cameraPoseMatrix = camPoseTransform,
-                leftViewMatrix = leftViewM,
-                rightViewMatrix = rightViewM,
-                leftProjectionMatrix = leftProjM,
-                rightProjectionMatrix = rightProjM,
-                leftEyePose = Vec3(leftEyePose.tx(), leftEyePose.ty(), leftEyePose.tz()),
-                rightEyePose = Vec3(rightEyePose.tx(), rightEyePose.ty(), rightEyePose.tz()),
-                ipdMeters = ipd,
-                vergenceDegrees = vergence,
-                depthMap = _depthMapBuffer.value,
-                isTracking = isTracking
-            )
-        } catch (e: Exception) {
-            Log.w(TAG, "Error querying camera intrinsics for stereo", e)
-        }
-
-        val count = planeList.size
-        _trackingStatus.value = if (count > 0) {
-            "ARCore Tracking $count Physical Surface${if (count > 1) "s" else ""}"
-        } else {
-            "AR Spatial Scanner Ready"
         }
     }
 
