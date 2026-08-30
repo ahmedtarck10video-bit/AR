@@ -253,7 +253,6 @@ fun SpatialMainScreen(
                 // =============================================================
                 val gyroPitch = if (uiState.isGyroEnabled) -uiState.sensorOrientation.pitch else 0f
                 val gyroRoll = if (uiState.isGyroEnabled) uiState.sensorOrientation.roll else 0f
-                val gyroYaw = if (uiState.isGyroEnabled) uiState.sensorOrientation.yaw else 0f
 
                 Box(
                     modifier = Modifier
@@ -271,6 +270,10 @@ fun SpatialMainScreen(
                             panY = uiState.panY,
                             surfaceAnchor = uiState.surfaceAnchor,
                             isAnchored = uiState.arAnchorPlaced,
+                            hdriPreset = uiState.hdriPreset,
+                            renderEngineProfile = uiState.renderEngineProfile,
+                            isWireframe = uiState.isWireframe,
+                            modelColor = uiState.modelColor,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .pointerInput(Unit) {
@@ -340,6 +343,10 @@ fun SpatialMainScreen(
                 // MR (MIXED REALITY) STEREO DUAL-EYE PASSTHROUGH & SPATIAL OCCLUSION
                 // Hardware-Accelerated Dual Eye Split-Screen (Left Eye + Right Eye)
                 // =============================================================
+                val gyroPitch = if (uiState.isGyroEnabled) -uiState.sensorOrientation.pitch else 0f
+                val gyroRoll = if (uiState.isGyroEnabled) uiState.sensorOrientation.roll else 0f
+                val gyroYaw = if (uiState.isGyroEnabled) uiState.sensorOrientation.yaw else 0f
+
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -348,10 +355,10 @@ fun SpatialMainScreen(
                     if (hasCameraPermission) {
                         StereoARViewport(
                             model = currentModel,
-                            rotX = uiState.rotX,
-                            rotY = uiState.rotY,
-                            rotZ = uiState.rotZ,
-                            scale = uiState.scale,
+                            rotX = uiState.rotX + gyroPitch,
+                            rotY = uiState.rotY + gyroRoll + (uiState.surfaceAnchor?.rotationY ?: 0f),
+                            rotZ = uiState.rotZ + gyroYaw,
+                            scale = uiState.scale * (uiState.surfaceAnchor?.scale ?: 1.0f),
                             panX = uiState.panX,
                             panY = uiState.panY,
                             ipdMeters = uiState.ipdDistance,
@@ -361,6 +368,10 @@ fun SpatialMainScreen(
                             isDepthOcclusionEnabled = uiState.isDepthOcclusion,
                             depthMap = uiState.depthMap,
                             closestDepthDistanceMeters = uiState.depthFusionInfo.closestObjectDistanceMeters,
+                            hdriPreset = uiState.hdriPreset,
+                            renderEngineProfile = uiState.renderEngineProfile,
+                            isWireframe = uiState.isWireframe,
+                            modelColor = uiState.modelColor,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .pointerInput(Unit) {
@@ -389,45 +400,6 @@ fun SpatialMainScreen(
                                     }
                                 }
                         )
-
-                        // MR Mode Spatial Overlay Banner
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 90.dp, start = 16.dp, end = 16.dp),
-                            contentAlignment = Alignment.TopCenter
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .background(
-                                        Color(0xCC0D1B2A),
-                                        shape = RoundedCornerShape(20.dp)
-                                    )
-                                    .border(
-                                        1.dp,
-                                        NeonCyan.copy(alpha = 0.6f),
-                                        shape = RoundedCornerShape(20.dp)
-                                    )
-                                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .background(
-                                            if (uiState.arAnchorPlaced) GlowGreen else NeonCyan,
-                                            shape = CircleShape
-                                        )
-                                )
-                                Text(
-                                    text = if (uiState.arAnchorPlaced) "MR: Stereo Dual-Eye Active (Anchored)" else "MR: Stereo 6DoF Active (Tap to Anchor)",
-                                    color = Color.White,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                        }
                     } else {
                         // Camera Permission Request
                         Box(

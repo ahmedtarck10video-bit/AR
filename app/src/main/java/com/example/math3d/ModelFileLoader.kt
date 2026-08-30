@@ -79,28 +79,7 @@ object ModelFileLoader {
         val finalFilePath = finalCachedFile?.absolutePath
         val parsedTargetName = finalCachedFile?.name ?: rawName
 
-        // Fast path for native GLB / GLTF / USDZ / ZIP packages:
-        // Pass directly to SceneView / Filament ModelLoader without CPU triangle conversion!
-        if (isNativeSceneAsset && finalFilePath != null && java.io.File(finalFilePath).exists()) {
-            val file = java.io.File(finalFilePath)
-            val extractedDims = extractUniversalAssetDimensions(file)
-            val realW = extractedDims?.first ?: 0.5f
-            val realH = extractedDims?.second ?: 0.5f
-            val realD = extractedDims?.third ?: 0.5f
-
-            return Model3D(
-                name = displayName,
-                description = "Hardware Accelerated 3D PBR Model (${getFileFormatLabel(parsedTargetName)})",
-                triangles = emptyList(),
-                fileUri = uri,
-                localFilePath = finalFilePath,
-                isGlbOrGltf = true,
-                realWorldWidthMeters = realW,
-                realWorldHeightMeters = realH,
-                realWorldDepthMeters = realD
-            )
-        }
-
+        // Parse mesh stream to extract triangle geometry for instant, transparent rendering
         return try {
             val inputStream = if (finalCachedFile != null && finalCachedFile.exists()) {
                 finalCachedFile.inputStream()
@@ -126,9 +105,14 @@ object ModelFileLoader {
                 realW = max(0.05f, maxX - minX)
                 realH = max(0.05f, maxY - minY)
                 realD = max(0.05f, maxZ - minZ)
+            } else if (finalFilePath != null && java.io.File(finalFilePath).exists()) {
+                val extractedDims = extractUniversalAssetDimensions(java.io.File(finalFilePath))
+                realW = extractedDims?.first ?: 0.5f
+                realH = extractedDims?.second ?: 0.5f
+                realD = extractedDims?.third ?: 0.5f
             }
 
-            // Center at origin for clean rotation pivot while preserving 1:1 metric coordinates (no double-scaling)
+            // Center at origin for clean rotation pivot while preserving 1:1 metric coordinates
             val centered = if (triangles.isNotEmpty()) centerMeshAtOrigin(triangles) else emptyList()
 
             // If non-GLB format (e.g. OBJ/STL/PLY) was parsed, convert to standard binary GLB so Filament loads it directly
