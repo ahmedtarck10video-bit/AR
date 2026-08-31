@@ -128,6 +128,16 @@ fun SpatialMainScreen(
 
     val currentModel = uiState.currentModel
 
+    LaunchedEffect(uiState.currentMode) {
+        if ((uiState.currentMode == SpatialMode.AR || uiState.currentMode == SpatialMode.MR) && !hasCameraPermission) {
+            try {
+                permissionLauncher.launch(Manifest.permission.CAMERA)
+            } catch (e: Exception) {
+                // Safe ignore
+            }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(Color(0xFF0F172A))) {
         when (uiState.currentMode) {
             SpatialMode.OBJECT -> {
@@ -256,84 +266,70 @@ fun SpatialMainScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black)
+                        .background(Color(0xFF0F172A))
                 ) {
-                    if (hasCameraPermission) {
-                        SceneviewARViewport(
-                            model = currentModel,
-                            rotX = uiState.rotX + gyroPitch,
-                            rotY = uiState.rotY + gyroRoll + (uiState.surfaceAnchor?.rotationY ?: 0f),
-                            rotZ = 0f,
-                            scale = uiState.scale * (uiState.surfaceAnchor?.scale ?: 1.0f),
-                            panX = uiState.panX,
-                            panY = uiState.panY,
-                            surfaceAnchor = uiState.surfaceAnchor,
-                            isAnchored = uiState.arAnchorPlaced,
-                            hdriPreset = uiState.hdriPreset,
-                            renderEngineProfile = uiState.renderEngineProfile,
-                            isWireframe = uiState.isWireframe,
-                            modelColor = uiState.modelColor,
-                            onFrameCallback = { session, frame ->
-                                viewModel.arCoreManager.onExternalSessionFrame(session, frame)
-                            },
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .pointerInput(Unit) {
-                                    detectTapGestures(
-                                        onTap = { offset ->
-                                            val normX = offset.x / size.width.toFloat()
-                                            val normY = offset.y / size.height.toFloat()
-                                            viewModel.onSurfaceTapped(normX, normY)
-                                        },
-                                        onDoubleTap = {
-                                            viewModel.resetPosition()
-                                        }
-                                    )
-                                }
-                                .pointerInput(Unit) {
-                                    detectTransformGestures { _, pan, zoom, rotation ->
-                                        if (pan.x != 0f || pan.y != 0f) {
-                                            viewModel.updatePan(pan.x, pan.y)
-                                        }
-                                        if (zoom != 1.0f) {
-                                            viewModel.updateScale(zoom)
-                                        }
-                                        if (rotation != 0f) {
-                                            viewModel.updateRotation(deltaX = 0f, deltaY = rotation * 0.02f)
-                                        }
+                    SceneviewARViewport(
+                        model = currentModel,
+                        rotX = uiState.rotX + gyroPitch,
+                        rotY = uiState.rotY + gyroRoll + (uiState.surfaceAnchor?.rotationY ?: 0f),
+                        rotZ = 0f,
+                        scale = uiState.scale * (uiState.surfaceAnchor?.scale ?: 1.0f),
+                        panX = uiState.panX,
+                        panY = uiState.panY,
+                        surfaceAnchor = uiState.surfaceAnchor,
+                        isAnchored = uiState.arAnchorPlaced,
+                        hdriPreset = uiState.hdriPreset,
+                        renderEngineProfile = uiState.renderEngineProfile,
+                        isWireframe = uiState.isWireframe,
+                        modelColor = uiState.modelColor,
+                        onFrameCallback = { session, frame ->
+                            viewModel.arCoreManager.onExternalSessionFrame(session, frame)
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = { offset ->
+                                        val normX = offset.x / size.width.toFloat()
+                                        val normY = offset.y / size.height.toFloat()
+                                        viewModel.onSurfaceTapped(normX, normY)
+                                    },
+                                    onDoubleTap = {
+                                        viewModel.resetPosition()
+                                    }
+                                )
+                            }
+                            .pointerInput(Unit) {
+                                detectTransformGestures { _, pan, zoom, rotation ->
+                                    if (pan.x != 0f || pan.y != 0f) {
+                                        viewModel.updatePan(pan.x, pan.y)
+                                    }
+                                    if (zoom != 1.0f) {
+                                        viewModel.updateScale(zoom)
+                                    }
+                                    if (rotation != 0f) {
+                                        viewModel.updateRotation(deltaX = 0f, deltaY = rotation * 0.02f)
                                     }
                                 }
-                        )
-                    } else {
-                        // Camera Permission Request
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
+                            }
+                    )
+
+                    if (!hasCameraPermission) {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = Color(0xDD0F172A),
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 90.dp)
+                                .clickable { permissionLauncher.launch(Manifest.permission.CAMERA) }
                         ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(16.dp),
-                                modifier = Modifier.padding(32.dp)
+                            Row(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Icon(
-                                    Icons.Default.CameraAlt,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(54.dp)
-                                )
-                                Text(
-                                    text = "Camera Access Required for AR",
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Button(
-                                    onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                                    shape = RoundedCornerShape(20.dp)
-                                ) {
-                                    Text("Grant Access", color = Color.Black, fontWeight = FontWeight.Bold)
-                                }
+                                Icon(Icons.Default.CameraAlt, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp))
+                                Text("Tap to enable live camera feed", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                             }
                         }
                     }
@@ -352,86 +348,72 @@ fun SpatialMainScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black)
+                        .background(Color(0xFF0F172A))
                 ) {
-                    if (hasCameraPermission) {
-                        StereoARViewport(
-                            model = currentModel,
-                            rotX = uiState.rotX + gyroPitch,
-                            rotY = uiState.rotY + gyroRoll + (uiState.surfaceAnchor?.rotationY ?: 0f),
-                            rotZ = uiState.rotZ + gyroYaw,
-                            scale = uiState.scale * (uiState.surfaceAnchor?.scale ?: 1.0f),
-                            panX = uiState.panX,
-                            panY = uiState.panY,
-                            ipdMeters = uiState.ipdDistance,
-                            surfaceAnchor = uiState.surfaceAnchor,
-                            isAnchored = uiState.arAnchorPlaced,
-                            stereoEyeState = uiState.stereoEyeState,
-                            isDepthOcclusionEnabled = uiState.isDepthOcclusion,
-                            depthMap = uiState.depthMap,
-                            closestDepthDistanceMeters = uiState.depthFusionInfo.closestObjectDistanceMeters,
-                            hdriPreset = uiState.hdriPreset,
-                            renderEngineProfile = uiState.renderEngineProfile,
-                            isWireframe = uiState.isWireframe,
-                            modelColor = uiState.modelColor,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .pointerInput(Unit) {
-                                    detectTapGestures(
-                                        onTap = { offset ->
-                                            val normX = offset.x / size.width.toFloat()
-                                            val normY = offset.y / size.height.toFloat()
-                                            viewModel.onSurfaceTapped(normX, normY)
-                                        },
-                                        onDoubleTap = {
-                                            viewModel.resetPosition()
-                                        }
-                                    )
-                                }
-                                .pointerInput(Unit) {
-                                    detectTransformGestures { _, pan, zoom, rotation ->
-                                        if (pan.x != 0f || pan.y != 0f) {
-                                            viewModel.updatePan(pan.x, pan.y)
-                                        }
-                                        if (zoom != 1.0f) {
-                                            viewModel.updateScale(zoom)
-                                        }
-                                        if (rotation != 0f) {
-                                            viewModel.updateRotation(deltaX = 0f, deltaY = rotation * 0.02f)
-                                        }
+                    StereoARViewport(
+                        model = currentModel,
+                        rotX = uiState.rotX + gyroPitch,
+                        rotY = uiState.rotY + gyroRoll + (uiState.surfaceAnchor?.rotationY ?: 0f),
+                        rotZ = uiState.rotZ + gyroYaw,
+                        scale = uiState.scale * (uiState.surfaceAnchor?.scale ?: 1.0f),
+                        panX = uiState.panX,
+                        panY = uiState.panY,
+                        ipdMeters = uiState.ipdDistance,
+                        surfaceAnchor = uiState.surfaceAnchor,
+                        isAnchored = uiState.arAnchorPlaced,
+                        stereoEyeState = uiState.stereoEyeState,
+                        isDepthOcclusionEnabled = uiState.isDepthOcclusion,
+                        depthMap = uiState.depthMap,
+                        closestDepthDistanceMeters = uiState.depthFusionInfo.closestObjectDistanceMeters,
+                        hdriPreset = uiState.hdriPreset,
+                        renderEngineProfile = uiState.renderEngineProfile,
+                        isWireframe = uiState.isWireframe,
+                        modelColor = uiState.modelColor,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = { offset ->
+                                        val normX = offset.x / size.width.toFloat()
+                                        val normY = offset.y / size.height.toFloat()
+                                        viewModel.onSurfaceTapped(normX, normY)
+                                    },
+                                    onDoubleTap = {
+                                        viewModel.resetPosition()
+                                    }
+                                )
+                            }
+                            .pointerInput(Unit) {
+                                detectTransformGestures { _, pan, zoom, rotation ->
+                                    if (pan.x != 0f || pan.y != 0f) {
+                                        viewModel.updatePan(pan.x, pan.y)
+                                    }
+                                    if (zoom != 1.0f) {
+                                        viewModel.updateScale(zoom)
+                                    }
+                                    if (rotation != 0f) {
+                                        viewModel.updateRotation(deltaX = 0f, deltaY = rotation * 0.02f)
                                     }
                                 }
-                        )
-                    } else {
-                        // Camera Permission Request
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
+                            }
+                    )
+
+                    if (!hasCameraPermission) {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = Color(0xDD0F172A),
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 90.dp)
+                                .clickable { permissionLauncher.launch(Manifest.permission.CAMERA) }
                         ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(16.dp),
-                                modifier = Modifier.padding(32.dp)
+                            Row(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Icon(
-                                    Icons.Default.CameraAlt,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(54.dp)
-                                )
-                                Text(
-                                    text = "Camera Access Required for Mixed Reality",
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Button(
-                                    onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                                    shape = RoundedCornerShape(20.dp)
-                                ) {
-                                    Text("Grant Access", color = Color.Black, fontWeight = FontWeight.Bold)
-                                }
+                                Icon(Icons.Default.CameraAlt, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp))
+                                Text("Tap to enable live camera feed", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                             }
                         }
                     }

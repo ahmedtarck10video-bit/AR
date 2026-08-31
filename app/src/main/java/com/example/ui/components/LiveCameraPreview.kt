@@ -1,12 +1,17 @@
 package com.example.ui.components
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.SurfaceTexture
+import android.hardware.camera2.*
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import android.view.Surface
+import android.view.TextureView
 import android.view.ViewGroup
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -18,70 +23,140 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 
 /**
- * Universal Hardware-Accelerated Live Camera Feed for AR & MR Passthrough.
- * - Dynamically binds physical back/front camera when available.
- * - Provides an active spatial optical passthrough background for emulators & streaming environments
- *   so the viewport is never black.
+ * Universal Hardware-Accelerated Live Camera Feed for AR & MR Passthrough using Native Camera2.
+ * Eliminates external CameraX dependencies for direct hardware-level performance and low latency.
  */
 @Composable
 fun LiveCameraPreview(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var isCameraActive by remember { mutableStateOf(false) }
-
     val hasPermission = remember {
         ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     }
 
     Box(modifier = modifier.fillMaxSize().background(Color(0xFF0F172A))) {
-        // Dynamic animated optical spatial background visible in emulator & physical devices
+        // Dynamic optical spatial background
         SpatialCameraSimulationBackground(modifier = Modifier.fillMaxSize())
 
         if (hasPermission) {
             AndroidView(
                 factory = { ctx ->
-                    PreviewView(ctx).apply {
+                    NativeCamera2TextureView(ctx).apply {
                         layoutParams = ViewGroup.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
                         )
-                        scaleType = PreviewView.ScaleType.FILL_CENTER
-                        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-
-                        val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-                        cameraProviderFuture.addListener({
-                            try {
-                                val cameraProvider = cameraProviderFuture.get()
-                                val cameraSelector = when {
-                                    cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
-                                    cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
-                                    else -> null
-                                }
-
-                                if (cameraSelector != null) {
-                                    val preview = Preview.Builder().build().also {
-                                        it.setSurfaceProvider(surfaceProvider)
-                                    }
-                                    cameraProvider.unbindAll()
-                                    cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
-                                    isCameraActive = true
-                                }
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
-                        }, ContextCompat.getMainExecutor(ctx))
                     }
                 },
                 modifier = Modifier.fillMaxSize()
             )
+        }
+    }
+}
+
+/**
+ * Lightweight Camera2 TextureView for direct camera streaming without CameraX.
+ */
+@SuppressLint("MissingPermission")
+private class NativeCamera2TextureView(context: Context) : TextureView(context), TextureView.SurfaceTextureListener {
+
+    private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var cameraDevice: CameraDevice? = null
+    private var captureSession: CameraCaptureSession? = null
+
+    init {
+        surfaceTextureListener = this
+        isOpaque = false
+    }
+
+    override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+        startCamera(surface)
+    }
+
+    override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+
+    override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+        stopCamera()
+        return true
+    }
+
+    override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+
+    private fun startCamera(surfaceTexture: SurfaceTexture) {
+        val manager = cameraManager ?: return
+        try {
+            val cameraIds = manager.cameraIdList
+            val selectedCameraId = cameraIds.firstOrNull { id ->
+                val chars = manager.getCameraCharacteristics(id)
+                chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+            } ?: cameraIds.firstOrNull() ?: return
+
+            manager.openCamera(selectedCameraId, object : CameraDevice.StateCallback() {
+                override fun onOpened(camera: CameraDevice) {
+                    cameraDevice = camera
+                    try {
+                        val surface = Surface(surfaceTexture)
+                        val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                            addTarget(surface)
+                            set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                            set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                        }
+
+                        camera.createCaptureSession(
+                            listOf(surface),
+                            object : CameraCaptureSession.StateCallback() {
+                                override fun onConfigured(session: CameraCaptureSession) {
+                                    if (cameraDevice == null) return
+                                    captureSession = session
+                                    try {
+                                        session.setRepeatingRequest(requestBuilder.build(), null, mainHandler)
+                                    } catch (e: Exception) {
+                                        Log.e("Camera2Preview", "Failed to start repeating request", e)
+                                    }
+                                }
+
+                                override fun onConfigureFailed(session: CameraCaptureSession) {
+                                    Log.e("Camera2Preview", "Failed to configure camera capture session")
+                                }
+                            },
+                            mainHandler
+                        )
+                    } catch (e: Exception) {
+                        Log.e("Camera2Preview", "Failed to create capture session", e)
+                    }
+                }
+
+                override fun onDisconnected(camera: CameraDevice) {
+                    camera.close()
+                    cameraDevice = null
+                }
+
+                override fun onError(camera: CameraDevice, error: Int) {
+                    camera.close()
+                    cameraDevice = null
+                }
+            }, mainHandler)
+        } catch (e: Exception) {
+            Log.e("Camera2Preview", "Error opening camera", e)
+        }
+    }
+
+    private fun stopCamera() {
+        try {
+            captureSession?.stopRepeating()
+            captureSession?.close()
+            captureSession = null
+            cameraDevice?.close()
+            cameraDevice = null
+        } catch (e: Exception) {
+            Log.e("Camera2Preview", "Error closing camera", e)
         }
     }
 }

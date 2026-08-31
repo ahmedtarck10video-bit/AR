@@ -72,12 +72,16 @@ fun Sceneview3DViewport(
                 }
             }.apply {
                 if (isTransparent) {
-                    setZOrderMediaOverlay(true)
-                    holder.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
-                    renderer?.let { r ->
-                        val opts = r.clearOptions
-                        opts.clear = true
-                        r.clearOptions = opts
+                    try {
+                        setZOrderMediaOverlay(true)
+                        holder.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
+                        renderer?.let { r ->
+                            val opts = r.clearOptions
+                            opts.clear = true
+                            r.clearOptions = opts
+                        }
+                    } catch (e: Throwable) {
+                        // Safe fallback on emulators with restricted EGL context queries
                     }
                 }
                 cameraNode.position = Position(cameraOffsetX, 0f, 3.5f)

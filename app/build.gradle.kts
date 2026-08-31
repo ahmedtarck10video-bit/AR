@@ -77,12 +77,6 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.kotlinx.coroutines.android)
 
-    // CameraX for isolated non-AR camera modes
-    implementation(libs.androidx.camera.core)
-    implementation(libs.androidx.camera.camera2)
-    implementation(libs.androidx.camera.lifecycle)
-    implementation(libs.androidx.camera.view)
-
     // Google ARCore for Real-time Plane Detection & Spatial Surface Tracking
     implementation(libs.google.ar.core)
 
