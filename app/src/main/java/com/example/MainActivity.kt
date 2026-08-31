@@ -273,6 +273,9 @@ fun SpatialMainScreen(
                             renderEngineProfile = uiState.renderEngineProfile,
                             isWireframe = uiState.isWireframe,
                             modelColor = uiState.modelColor,
+                            onFrameCallback = { session, frame ->
+                                viewModel.arCoreManager.onExternalSessionFrame(session, frame)
+                            },
                             modifier = Modifier
                                 .fillMaxSize()
                                 .pointerInput(Unit) {

@@ -32,6 +32,7 @@ fun Sceneview3DViewport(
     scale: Float = 1.0f,
     panX: Float = 0f,
     panY: Float = 0f,
+    cameraOffsetX: Float = 0f,
     surfaceAnchor: com.example.engine.ar.ARSurfaceAnchor? = null,
     isAnchored: Boolean = false,
     isAutoSpin: Boolean = false,
@@ -72,8 +73,14 @@ fun Sceneview3DViewport(
             }.apply {
                 if (isTransparent) {
                     setZOrderMediaOverlay(true)
+                    holder.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
+                    renderer?.let { r ->
+                        val opts = r.clearOptions
+                        opts.clear = true
+                        r.clearOptions = opts
+                    }
                 }
-                cameraNode.position = Position(0f, 0f, 3.5f)
+                cameraNode.position = Position(cameraOffsetX, 0f, 3.5f)
                 sceneViewRef = this
             }
         },
@@ -96,6 +103,17 @@ fun Sceneview3DViewport(
             val targetModel = model
             val targetPath = targetModel?.localFilePath ?: targetModel?.fileUri?.toString()
 
+            // Dynamic camera distance framing based on metric bounds
+            val targetCameraDist = if (isTransparent) {
+                2.8f
+            } else {
+                val maxDim = if (targetModel != null) {
+                    maxOf(targetModel.realWorldHeightMeters, targetModel.realWorldWidthMeters, targetModel.realWorldDepthMeters)
+                } else 1.0f
+                maxOf(1.8f, maxDim * 2.2f)
+            }
+            sceneView.cameraNode.position = Position(cameraOffsetX, 0f, targetCameraDist)
+
             if (targetModel == null || targetPath == null) {
                 if (currentModelNode != null) {
                     try {
@@ -113,15 +131,6 @@ fun Sceneview3DViewport(
             } else if (targetPath != loadedModelPath && !isLoadingModel) {
                 isLoadingModel = true
                 loadedModelPath = targetPath
-
-                // Dynamic camera distance framing based on metric bounds
-                val targetCameraDist = if (isTransparent) {
-                    2.8f
-                } else {
-                    val maxDim = maxOf(targetModel.realWorldHeightMeters, targetModel.realWorldWidthMeters, targetModel.realWorldDepthMeters)
-                    maxOf(1.8f, maxDim * 2.2f)
-                }
-                sceneView.cameraNode.position = Position(0f, 0f, targetCameraDist)
 
                 coroutineScope.launch {
                     try {

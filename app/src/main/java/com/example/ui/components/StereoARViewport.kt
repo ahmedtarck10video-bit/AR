@@ -76,13 +76,33 @@ fun StereoARViewport(
                         scale = scale,
                         panX = panX,
                         panY = panY,
+                        cameraOffsetX = -ipdMeters / 2f,
                         surfaceAnchor = surfaceAnchor,
                         isAnchored = isAnchored,
                         isTransparent = true,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
+                
+                // Left Eye Indicator
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(12.dp)
+                        .background(Color(0x88000000), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text("LEFT EYE", color = Color(0xFF00FFCC), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
             }
+
+            // Central Divider for VR Headsets
+            Box(
+                modifier = Modifier
+                    .width(2.dp)
+                    .fillMaxHeight()
+                    .background(Color(0x66FFFFFF))
+            )
 
             // ================= RIGHT EYE (50% WIDTH) =================
             Box(
@@ -100,11 +120,23 @@ fun StereoARViewport(
                         scale = scale,
                         panX = panX,
                         panY = panY,
+                        cameraOffsetX = ipdMeters / 2f,
                         surfaceAnchor = surfaceAnchor,
                         isAnchored = isAnchored,
                         isTransparent = true,
                         modifier = Modifier.fillMaxSize()
                     )
+                }
+
+                // Right Eye Indicator
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(12.dp)
+                        .background(Color(0x88000000), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text("RIGHT EYE", color = Color(0xFF00FFCC), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }

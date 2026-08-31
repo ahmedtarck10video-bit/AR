@@ -237,10 +237,12 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
             )
         }
 
-        // Collect hardware capabilities
+        // Collect hardware capabilities (distinct)
         viewModelScope.launch {
             arCoreManager.capabilities.collect { caps ->
-                _uiState.value = _uiState.value.copy(capabilities = caps)
+                if (_uiState.value.capabilities != caps) {
+                    _uiState.value = _uiState.value.copy(capabilities = caps)
+                }
             }
         }
 
@@ -251,11 +253,11 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
 
         viewModelScope.launch {
             sensorTracker.orientation.collect { orientation ->
-                if (_uiState.value.currentMode != SpatialMode.OBJECT) {
+                if (_uiState.value.currentMode != SpatialMode.OBJECT && _uiState.value.isGyroEnabled) {
                     val dP = kotlin.math.abs(orientation.pitch - lastEmittedPitch)
                     val dR = kotlin.math.abs(orientation.roll - lastEmittedRoll)
                     val dY = kotlin.math.abs(orientation.yaw - lastEmittedYaw)
-                    if (dP > 0.015f || dR > 0.015f || dY > 0.015f) {
+                    if (dP > 0.03f || dR > 0.03f || dY > 0.03f) {
                         lastEmittedPitch = orientation.pitch
                         lastEmittedRoll = orientation.roll
                         lastEmittedYaw = orientation.yaw
@@ -268,108 +270,48 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
             }
         }
 
-        // Collect ARCore detected planes
+        // Collect ARCore detected planes (only update if count or IDs changed)
         viewModelScope.launch {
             arCoreManager.trackedPlanes.collect { planes ->
-                _uiState.value = _uiState.value.copy(detectedPlanes = planes)
+                if (_uiState.value.detectedPlanes.size != planes.size) {
+                    _uiState.value = _uiState.value.copy(detectedPlanes = planes)
+                }
             }
         }
 
         // Collect ARCore tracked images
         viewModelScope.launch {
             arCoreManager.trackedImages.collect { images ->
-                _uiState.value = _uiState.value.copy(trackedImages = images)
-            }
-        }
-
-        // Collect ARCore point cloud
-        viewModelScope.launch {
-            arCoreManager.pointCloud.collect { points ->
-                _uiState.value = _uiState.value.copy(pointCloud = points)
+                if (_uiState.value.trackedImages.size != images.size) {
+                    _uiState.value = _uiState.value.copy(trackedImages = images)
+                }
             }
         }
 
         // Collect ARCore tracking status
         viewModelScope.launch {
             arCoreManager.trackingStatus.collect { status ->
-                _uiState.value = _uiState.value.copy(arCoreStatus = status)
+                if (_uiState.value.arCoreStatus != status) {
+                    _uiState.value = _uiState.value.copy(arCoreStatus = status)
+                }
             }
         }
 
         // Collect ARCore tracking quality
         viewModelScope.launch {
             arCoreManager.trackingQuality.collect { quality ->
-                _uiState.value = _uiState.value.copy(trackingQuality = quality)
-            }
-        }
-
-        // Collect ARCore Geospatial Info
-        viewModelScope.launch {
-            arCoreManager.geospatialInfo.collect { geo ->
-                _uiState.value = _uiState.value.copy(geospatialInfo = geo)
-            }
-        }
-
-        // Collect ARCore Streetscape Meshes
-        viewModelScope.launch {
-            arCoreManager.streetscapeMeshes.collect { meshes ->
-                _uiState.value = _uiState.value.copy(streetscapeMeshes = meshes)
-            }
-        }
-
-        // Collect Scene Semantics
-        viewModelScope.launch {
-            arCoreManager.semanticDistribution.collect { dist ->
-                _uiState.value = _uiState.value.copy(semanticDistribution = dist)
-            }
-        }
-
-        // Collect Depth Fusion
-        viewModelScope.launch {
-            arCoreManager.depthFusionInfo.collect { depthInfo ->
-                _uiState.value = _uiState.value.copy(depthFusionInfo = depthInfo)
-            }
-        }
-
-        // Collect Face Tracking
-        viewModelScope.launch {
-            arCoreManager.faceMeshTracking.collect { faceInfo ->
-                _uiState.value = _uiState.value.copy(faceTracking = faceInfo)
-            }
-        }
-
-        // Collect Stereo Eye State
-        viewModelScope.launch {
-            arCoreManager.stereoEyeState.collect { eyeState ->
-                _uiState.value = _uiState.value.copy(stereoEyeState = eyeState)
-            }
-        }
-
-        // Collect Depth Map Buffer for per-pixel depth occlusion
-        viewModelScope.launch {
-            arCoreManager.depthMapBuffer.collect { depthMap ->
-                _uiState.value = _uiState.value.copy(depthMap = depthMap)
-            }
-        }
-
-        // Collect Frame Snapshot for synchronized MR ocular rendering
-        viewModelScope.launch {
-            arCoreManager.frameSnapshot.collect { snapshot ->
-                _uiState.value = _uiState.value.copy(frameSnapshot = snapshot)
-            }
-        }
-
-        // Collect ARCore light estimation
-        viewModelScope.launch {
-            arCoreManager.lightIntensity.collect { intensity ->
-                _uiState.value = _uiState.value.copy(lightIntensity = intensity)
+                if (_uiState.value.trackingQuality != quality) {
+                    _uiState.value = _uiState.value.copy(trackingQuality = quality)
+                }
             }
         }
 
         // Collect Recorded Sessions list
         viewModelScope.launch {
             arCoreManager.recordedSessions.collect { sessions ->
-                _uiState.value = _uiState.value.copy(recordedSessions = sessions)
+                if (_uiState.value.recordedSessions.size != sessions.size) {
+                    _uiState.value = _uiState.value.copy(recordedSessions = sessions)
+                }
             }
         }
 
@@ -410,14 +352,10 @@ class MixedRealityViewModel(application: Application) : AndroidViewModel(applica
             SpatialMode.AR -> {
                 sensorTracker.start()
                 arCoreManager.isStereoPipelineActive = false
-                arCoreManager.start()
-                startArFrameLoop()
             }
             SpatialMode.MR -> {
                 sensorTracker.start()
                 arCoreManager.isStereoPipelineActive = true
-                arCoreManager.start()
-                startArFrameLoop()
             }
             SpatialMode.OBJECT -> {
                 stopArFrameLoop()

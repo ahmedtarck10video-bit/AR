@@ -653,6 +653,14 @@ class ARCoreManager(private val context: Context) {
     @Volatile
     private var currentFrame: Frame? = null
 
+    fun onExternalSessionFrame(session: Session, frame: Frame) {
+        this.session = session
+        this.isSessionRunning = true
+        this.isARCoreAvailable = true
+        this.currentFrame = frame
+        processARCoreFrame(frame)
+    }
+
     fun updateFrame(pitch: Float, roll: Float, yaw: Float) {
         fallbackTimeSec += 0.033f
 
